@@ -1,0 +1,13 @@
+# 样式模板由 make_reference.py 在首次运行时自动生成，不要提交。
+# 它派生自 pandoc 自带的 data/reference.docx，而 pandoc 是 GPL（v2 或更高）。
+# 不提交 = 仓库里不含任何 GPL 数据，许可证上干净，也不会随 pandoc 升级而过期。
+reference-*.docx
+reference.docx
+
+__pycache__/
+*.pyc
+.DS_Store
+
+# WPS / Office 打开文件时产生的锁文件
+.~*
+~$*

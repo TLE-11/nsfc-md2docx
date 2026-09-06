@@ -1,0 +1,33 @@
+MIT License
+
+Copyright (c) 2026 TLE-11
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
+关于第三方组件的说明：
+
+本项目通过子进程调用 pandoc，不链接 pandoc 代码，因此不构成 pandoc 的派生作品，
+本仓库代码以 MIT 许可。
+
+但请注意：make_reference.py 生成的 reference-*.docx 派生自 pandoc 自带的
+data/reference.docx，而 pandoc 采用 GPL（v2 或更高）。这类文件已在 .gitignore
+中排除、不随仓库分发，改为在首次运行时由用户本机安装的 pandoc 现场生成。
+
+若你要把本项目打包成闭源产品分发，不要在包里附带这些生成出来的 .docx 模板。
