@@ -105,7 +105,9 @@ def main():
     # ---- 样式模板 ----
     ref = a.reference
     if not ref:
-        ref = os.path.join(HERE, 'reference-%s.docx' % a.fonts)
+        # v2：编号公式改为保留 oMathPara（display 规格），EquationNumbered
+        # 样式去掉了 center 制表位。文件名带版本，老模板不混用、自动重新生成
+        ref = os.path.join(HERE, 'reference-v2-%s.docx' % a.fonts)
         if not os.path.exists(ref):
             print('[pipe] 生成样式模板（字体档位: %s）' % a.fonts)
             run([py, os.path.join(HERE, 'make_reference.py'), ref,

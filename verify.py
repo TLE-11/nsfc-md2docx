@@ -92,12 +92,14 @@ def main():
         got_all = len(re.findall(r'<w:rStyle w:val="MathSource"/></w:rPr>'
                                  r'<w:t[^>]*>.*?</w:t>', s, re.S))
     got_inline = got_all - got_block
-    # 带编号的公式必须已从 m:oMathPara 拆成内联 m:oMath，否则制表位排不进同一段落。
-    # 不编号的公式保留 m:oMathPara 是正确的（块级居中）。
-    bad_wrap = sum(1 for p in paras
-                   if '<w:pStyle w:val="EquationNumbered"/>' in p and '<m:oMathPara' in p)
-    if bad_wrap:
-        fail.append('%d 个带编号公式仍是块级 m:oMathPara，编号排不到同一行' % bad_wrap)
+    # 带编号的公式必须保留 m:oMathPara（display 规格容器），否则 Word 把公式
+    # 按行内紧凑规格排版：Σ 上下限挪到右下、分数缩成小分式。
+    if a.math_mode == 'omml':
+        bad_wrap = sum(1 for p in paras
+                       if '<w:pStyle w:val="EquationNumbered"/>' in p
+                       and '<m:oMathPara' not in p)
+        if bad_wrap:
+            fail.append('%d 个带编号公式丢失 m:oMathPara，公式被降级为行内规格' % bad_wrap)
     if got_block != n_block:
         fail.append('块公式数量不符: 源 %d -> 产出 %d（很可能有公式被静默吞掉）'
                     % (n_block, got_block))

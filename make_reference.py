@@ -145,12 +145,11 @@ def patch_styles_xml(xml, spec, fonts):
                     ppr('center', 0, 6, 6, 1.0) + rpr(song, 'Cambria Math', 12, False))
     xml = add_style(xml, EQNUM_STYLE_ID, 'Equation Number', 'Normal',
                     ppr('right', 0, 6, 6, 1.0) + rpr(song, 'Times New Roman', 12, False))
-    # 带编号的行间公式：靠制表位实现「公式居中 + 编号右对齐」。
-    # 不用无边框表格，因为 Word/WPS 会给无边框表格画屏幕虚框（不打印但碍眼），
-    # 而"查看虚框"是应用级开关、存不进文件，每台机器都得手动关。
-    tabs = ('<w:tabs><w:tab w:val="center" w:pos="%d"/>'
-            '<w:tab w:val="right" w:pos="%d"/></w:tabs>'
-            % (TEXT_WIDTH_TWIPS // 2, TEXT_WIDTH_TWIPS))
+    # 带编号的行间公式：公式靠 oMathPara 自带居中（display 规格），编号前
+    # 一个 TAB 推到右边距。不用无边框表格（Word/WPS 会给它画屏幕虚框）。
+    # 只留 right 位：若再留 center 位，短公式右侧的 TAB 会先撞到行中央，
+    # 编号对不到右端。
+    tabs = '<w:tabs><w:tab w:val="right" w:pos="%d"/></w:tabs>' % TEXT_WIDTH_TWIPS
     xml = add_style(xml, EQNUMBERED_STYLE_ID, 'Equation Numbered', 'Normal',
                     ppr(None, 0, 6, 6, 1.0, extra=tabs)
                     + rpr(song, 'Cambria Math', 12, False))

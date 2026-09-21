@@ -73,21 +73,31 @@ def number_xml(num, bmk, ids, seq_field):
 
 
 def numbered_eq_p(math_para_xml, num, bmk, ids, seq_field, boxed):
-    """把「块公式段落 + 编号」合成单个段落：TAB 公式 TAB （n）。
+    """把「块公式段落 + 编号」合成单个段落：公式 （n）。
 
-    公式本体需要从 m:oMathPara 里拆出内层 m:oMath 变成内联对象，
-    否则 oMathPara 是块级的，同段落里放不了制表位和编号。
+    omml 模式：保留完整 m:oMathPara，编号 run 跟在它后面同段。
+    这正是 Word 原生行为（在显示公式后面 Tab 输入编号，存出来的结构就是
+    oMathPara + 文本 run 同段）。早期版本把公式从 oMathPara 里拆成内联
+    m:oMath，编号是能同段了，但 Word 对内联公式一律套用行内紧凑规格：
+    Σ 的上下限被挪到右下、分数缩成小分式——带编号公式整体降级。
+    oMathPara 自带居中（defJc=centerGroup），不需要前置 TAB。
+
+    latex 模式：本体是 MathSource 文本 run，没有显示规格一说，左起即可
+    （反正随后要在 Word 里交给 MathType/AxMath 转换，居中性由转换结果决定）。
     """
-    m = OMATHPARA_UNWRAP.search(math_para_xml)
+    m = OMATHPARA.search(math_para_xml)
     if m:
-        body = m.group(1)                     # omml 模式：内层 m:oMath
-    else:
-        # latex 模式：本体是带 MathSource 样式的文本 run，直接取段落内容
-        body = re.sub(r'^<w:p(?:\s[^>]*)?>|</w:p>$', '', math_para_xml)
-        body = re.sub(r'<w:pPr>.*?</w:pPr>|<w:pPr/>', '', body, flags=re.S)
-        body = re.sub(r'<w:bookmark(?:Start|End)[^>]*/>', '', body)
+        # omml 模式：完整保留显示公式容器
+        return ('<w:p><w:pPr><w:pStyle w:val="EquationNumbered"/>%s</w:pPr>'
+                '%s<w:r><w:tab/></w:r>%s</w:p>'
+                % (BOXBORDER if boxed else '', m.group(0),
+                   number_xml(num, bmk, ids, seq_field)))
+    # latex 模式：取段落内容（MathSource run）
+    body = re.sub(r'^<w:p(?:\s[^>]*)?>|</w:p>$', '', math_para_xml)
+    body = re.sub(r'<w:pPr>.*?</w:pPr>|<w:pPr/>', '', body, flags=re.S)
+    body = re.sub(r'<w:bookmark(?:Start|End)[^>]*/>', '', body)
     return ('<w:p><w:pPr><w:pStyle w:val="EquationNumbered"/>%s</w:pPr>'
-            '<w:r><w:tab/></w:r>%s<w:r><w:tab/></w:r>%s</w:p>'
+            '%s<w:r><w:tab/></w:r>%s</w:p>'
             % (BOXBORDER if boxed else '', body,
                number_xml(num, bmk, ids, seq_field)))
 
