@@ -2,8 +2,8 @@
 """docx 后处理器：直接操作 word/document.xml，完成 pandoc 做不到的排版。
 
 处理项：
-  1. ⟦EQNO:n⟧  -> 把上一段块公式与编号合成 1x3 无边框表格
-                   [ 空白 | 公式居中 | (n) 右对齐 ]，即国标公式编号写法
+  1. ⟦EQNO:n⟧  -> 把上一段块公式与编号合成一个段落：
+                   TAB 公式 TAB (n)，制表位排版（国标公式编号写法，无表格）
   2. ⟦BOX⟧     -> 给该公式段落加外框
   3. ⟦MISSINGIMG:名⟧ -> 醒目红色占位提示，方便回填
   4. ⟦FIGPH⟧   -> 图占位段落套 Caption 样式
@@ -372,7 +372,7 @@ def process(xml, stats, math_list=None, seq_field=True):
 
         txt = plain(x)
 
-        # --- 1/2: 编号公式 -> 表格 -----------------------------------
+        # --- 1/2: 编号公式 -> 制表位段落 -----------------------------
         eq = re.search(r'⟦EQNO:([^|⟧]*)\|([^|⟧]*)\|(\d+)⟧', txt)
         if eq:
             boxed = '⟦BOX⟧' in txt
@@ -393,7 +393,7 @@ def process(xml, stats, math_list=None, seq_field=True):
             if j >= 0 and is_display_math(out[j]):
                 out[j] = numbered_eq_p(out[j], num, bmk, ids, seq_field, boxed)
                 stats['eqnum'] += 1
-                stats['eq_plain'] -= 1  # 该公式已并入编号表格，不再计入未编号
+                stats['eq_plain'] -= 1  # 该公式已并入编号段落，不再计入未编号
                 if boxed:
                     stats['boxed'] += 1
                 # 编号标记所在的段落可能还带着正文：原文存在把 $$ 与正文写在同一段的

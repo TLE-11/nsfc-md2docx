@@ -1,5 +1,12 @@
 # nsfc-md2docx
 
+[English](README.en.md) | **简体中文**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
+[![python 3+](https://img.shields.io/badge/python%203%2B-stdlib%20only-success.svg)](#依赖)
+[![pandoc](https://img.shields.io/badge/pandoc-required-orange.svg)](https://pandoc.org)
+[![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-60707f.svg)](#用法)
+
 **写基金本子 / 学位论文用的 Markdown 转 Word。**
 
 把带大量 LaTeX 公式的 Markdown 转成**能直接交稿**的 .docx：
@@ -116,7 +123,7 @@ md ──pre.py──> 规整后的 md ──pandoc──> step1.docx ──post
 | 问题 | 说明 |
 |---|---|
 | `aligned` 的 `&` | texmath 把对齐符当普通字符写进 OMML，公式里出现可见的 `&`。改成 OMML 正确的对齐点 `m:rPr/m:aln` |
-| 公式编号排版 | 每个编号公式做成 **1×3 无边框表格**：`[空白 \| 公式居中 \| （n）右对齐]`，即国标写法 |
+| 公式编号排版 | 编号公式合成一个段落：`TAB 公式 TAB （n）`，制表位排版（公式居中、编号右对齐），无表格 |
 | 图表题注 | `图 N：xxx` 段落套 Caption 样式（居中、五号、无缩进），可用于交叉引用 |
 | 块公式段落 | 统一套 `EquationPara` 样式：居中、无首行缩进 |
 
@@ -271,3 +278,24 @@ python3 make_reference.py reference.docx
   但 grep 计数是 0，看着像通过。**必须验证产物存在。**
 - bash 里变量后紧跟全角字符要写 `${VAR}`。`"$MODE）"` 会把全角括号的 UTF-8 字节
   当成变量名的一部分，配合 `set -u` 直接报 unbound variable。
+
+## 反馈与贡献
+
+- **转换出问题**：附上能复现的最小 .md 片段、完整命令与控制台输出；加 `--keep-temp`
+  把中间文件一并贴出来，定位会快很多。
+- **Windows 用户**：`mathtype_axmath.bas` 里 `ProbeEquationMacros` 的探测报告对固化
+  MathType / AxMath 宏名非常有价值，直接开 issue 贴出来即可。
+- **提 PR 前**先跑 `./example/run_tests.sh`，12 种参数组合全过再提。
+- 英文文档支持（`Eq. (n)` 引用回改、`Figure 1:` 题注识别）是范围明确的欢迎贡献，
+  缺口清单见 [README.en.md](README.en.md) 的 Why "NSFC" 一节。
+
+## 开源声明
+
+- 代码以 **[MIT](LICENSE)** 许可。仓库不含任何 GPL 数据：自动生成的 `reference-*.docx`
+  样式模板派生自 pandoc 自带模板（pandoc 为 GPL v2+），已在 `.gitignore` 排除、
+  不随仓库分发，首次运行时由你本机的 pandoc 现场生成。把本项目打包成闭源产品时
+  **不要附带这些生成物**。
+- 本项目与国家自然科学基金委员会、Microsoft（Word）、金山（WPS）、Wiris（MathType）、
+  AxMath 均无关联，相关名称仅用于描述兼容性。
+- 本流水线建立在 [pandoc](https://pandoc.org) 之上，感谢 John MacFarlane
+  与 texmath 的贡献者。
