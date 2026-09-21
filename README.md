@@ -1,91 +1,120 @@
 # nsfc-md2docx
 
-[English](README.en.md) | **简体中文**
+**English** | [简体中文](README_cn.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
-[![python 3+](https://img.shields.io/badge/python%203%2B-stdlib%20only-success.svg)](#依赖)
+[![python 3+](https://img.shields.io/badge/python%203%2B-stdlib%20only-success.svg)](#dependencies)
 [![pandoc](https://img.shields.io/badge/pandoc-required-orange.svg)](https://pandoc.org)
-[![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-60707f.svg)](#用法)
+[![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-60707f.svg)](#usage)
 
-**写基金本子 / 学位论文用的 Markdown 转 Word。**
+**Markdown → submission-ready .docx for grant proposals and theses.**
 
-把带大量 LaTeX 公式的 Markdown 转成**能直接交稿**的 .docx：
+Turns a Markdown file full of LaTeX math into a Word document you can hand in as-is:
 
-- 公式是 **Word 原生公式对象**，双击可编辑。不是 LaTeX 代码，不是图片，不需要装任何插件
-- **所有行间公式自动右编号**，用制表位排版（不是无边框表格，所以没有屏幕虚框）
-- 正文里的「式（n）」自动跟着重编号，并做成 **Word 的 REF 域**，按 F9 联动更新
-- 中文排版规范一次配好：宋体小四正文、首行缩进 2 字符、1.5 倍行距、黑体标题、五号居中题注
-- 需要 MathType / AxMath 的场合有专门的中转模式
+- Equations become **native Word equation objects** — double-click to edit in Word or WPS.
+  Not LaTeX code, not images, no plugins required
+- **Every display equation gets an automatic right-aligned number**, laid out with tab
+  stops (not borderless tables, so Word/WPS never draws those on-screen gridlines)
+- In-text references such as `式（6）` follow the renumbering and become **Word REF
+  fields** — press F9 and everything stays in sync
+- Chinese typographic conventions configured in one pass: SimSun 12 pt body text,
+  2-character first-line indent, 1.5× line spacing, bold-face headings, centered
+  10.5 pt captions
+- A relay mode for MathType / AxMath for when a template mandates them
 
-单纯的「LaTeX 转 OMML」已经有不少工具了。这个项目的重点是**中文本子的排版规范**
-（公式右编号、交叉引用联动、题注样式）和**一堆会静默丢内容的坑**——后者见下面的踩坑表，
-那部分比代码值钱。
+Converting "LaTeX → OMML" is already a solved problem. This project is about **the
+typographic conventions of Chinese academic documents** (right-aligned equation
+numbers, live cross-references, caption styles) and about **the traps that silently
+eat content** — the pitfall tables below are arguably worth more than the code.
 
-依赖只有 Python 3 + pandoc。
+Dependencies: Python 3 (standard library only) + pandoc. Nothing else.
 
-## 用法
+## Why "NSFC"?
 
-跨平台，逻辑都在 `md2docx.py` 里。Windows 详见 **[WINDOWS.md](WINDOWS.md)**。
+NSFC is the National Natural Science Foundation of China. Its grant proposals — like
+Chinese theses — are submitted as Word files under strict conventions: SimSun body
+text, right-aligned equation numbers such as （2-1）, cross-references that must
+survive renumbering, centered captions. This tool produces documents like that
+straight from Markdown.
+
+The pipeline itself is language-agnostic. What is currently Chinese-specific:
+
+| Behavior | Chinese-specific part | With an English document |
+|---|---|---|
+| Typography presets | SimSun / SimHei / KaiTi (reviewers' machines always have them) | Fonts are just presets — edit `SPEC` in `make_reference.py` |
+| In-text reference rewriting | matches `式（n）` / `式(n)` | `Eq. (n)` is **not** rewritten yet |
+| Caption detection | matches `图 N：` / `表 N：` | `Figure 1:` is **not** styled yet |
+| `--number-style chapter` | chapter number read from digit-leading headings (`# 2 …`) | falls back to plain numbering |
+| `verify.py` content check | character-by-character comparison of CJK text | equation-count checks still apply; the text diff does not |
+
+Everything else — equation conversion, numbering, tab-stop layout, field codes,
+image handling — works regardless of language. Patches for the gaps above are
+welcome and well-scoped.
+
+## Usage
+
+Same on all platforms; all logic lives in `md2docx.py`. Step-by-step for Windows
+(including the MathType/AxMath macros): **[WINDOWS.md](WINDOWS.md)** (in Chinese;
+the short version: `winget install python pandoc`, then `md2docx.bat input.md`).
 
 ```bash
-python3 md2docx.py 输入.md [-o 输出.docx] [选项]     # 三个平台通用
-./md2docx.sh 输入.md ...                            # macOS/Linux 薄壳
-md2docx.bat 输入.md ...                             # Windows 薄壳
+python3 md2docx.py input.md [-o output.docx] [options]   # all platforms
+./md2docx.sh input.md ...                                # macOS/Linux wrapper
+md2docx.bat input.md ...                                 # Windows wrapper
 ```
 
-例：
+Examples:
 
 ```bash
 python3 md2docx.py example/sample.md
-python3 md2docx.py 本子.md -o 本子.docx --assets ~/Obsidian/vault/attachments
-python3 md2docx.py 本子.md --number-style chapter    # 编号改成 (2-1)(3-1)
-python3 md2docx.py 本子.md --math-mode latex         # 给 MathType/AxMath 用
-python3 md2docx.py 本子.md --fonts macos --pdf       # 本机渲染 PDF 预览
+python3 md2docx.py proposal.md -o proposal.docx --assets ~/Obsidian/vault/attachments
+python3 md2docx.py proposal.md --number-style chapter    # numbers become (2-1)(3-1)
+python3 md2docx.py proposal.md --math-mode latex         # for MathType/AxMath
+python3 md2docx.py proposal.md --fonts macos --pdf       # render a PDF preview locally
 ```
 
-### 选项
+### Options
 
-| 选项 | 说明 |
+| Option | Description |
 |---|---|
-| `--math-mode omml\|latex` | 公式形态。默认 omml |
-| `--number all\|tag\|none` | 行间公式右编号范围。默认 all（所有行间公式都编号） |
-| `--number-style plain\|chapter` | `(1)(2)...` 还是 `(2-1)(3-1)...`。默认 plain |
-| `--fonts windows\|macos` | 样式模板字体档位。默认 windows（出稿用） |
-| `--assets 目录...` | 图片附件搜索目录（Obsidian 附件目录） |
-| `--reference 文件` | 用自己的 reference.docx，跳过自动生成 |
-| `--pdf` | 额外用 LibreOffice 渲染 PDF 便于肉眼检查 |
-| `--keep-temp` | 保留中间文件便于排查 |
+| `--math-mode omml\|latex` | Equation form. Default `omml` |
+| `--number all\|tag\|none` | Which display equations get a number. Default `all` |
+| `--number-style plain\|chapter` | `(1)(2)…` or `(2-1)(3-1)…`. Default `plain` |
+| `--fonts windows\|macos` | Font preset for the style template. Default `windows` (SimSun/SimHei/KaiTi, for submission); `macos` uses Songti SC etc. for local preview |
+| `--assets DIR…` | Directories searched for image attachments (e.g. an Obsidian vault) |
+| `--reference FILE` | Use your own reference.docx, skip auto-generation |
+| `--pdf` | Additionally render a PDF via LibreOffice for visual inspection |
+| `--keep-temp` | Keep intermediate files for troubleshooting |
 
-依赖只有 Python 3 标准库 + pandoc，不需要装任何 Python 第三方包。
+## Try it in one minute
 
-## 试一下
-
-仓库自带一份样例，刻意覆盖了下面所有已知陷阱：
+The repo ships a sample that deliberately triggers every known trap:
 
 ```bash
 python3 md2docx.py example/sample.md -o /tmp/sample.docx
 ```
 
-## 回归测试
+## Regression tests
 
 ```bash
-./example/run_tests.sh                  # 样例跑遍 12 种参数组合
-./example/run_tests.sh 我的本子.md        # 顺带测自己的文档
+./example/run_tests.sh                 # sample × 12 option combinations
+./example/run_tests.sh my-doc.md       # also runs your own document
 ```
 
-靠 `verify.py` 断言，任何一处回归都会非零退出。`example/sample.md` 每个小节末尾用
-HTML 注释标了它专门触发哪个陷阱，改动时请保留那些结构。
+`verify.py` asserts the invariants and exits non-zero on any regression. Each section
+of `example/sample.md` ends with an HTML comment naming the trap it exists to
+trigger — keep those structures when modifying it.
 
-### 两种公式模式
+### The two math modes
 
-| 模式 | 公式形态 | 适用场景 |
+| Mode | Equations become | When to use |
 |---|---|---|
-| `omml`（默认） | Word 原生公式对象 | WPS / Word 直接可编辑，**不需要装任何插件**。绝大多数情况用这个 |
-| `latex` | 蓝色等宽的 LaTeX 源码文本 | 单位模板要求必须用 MathType / AxMath 公式时的中间产物，见下节 |
+| `omml` (default) | Native Word equation objects | Word/WPS edit them natively, **no plugins needed** — covers almost every case |
+| `latex` | LaTeX source as blue monospace text | Intermediate product for MathType / AxMath batch conversion, see below |
 
-## 依赖
+## Dependencies
 
-Python 3 + pandoc。**不需要任何 Python 第三方包**（只用标准库）。
+Python 3 + pandoc. **No third-party Python packages** — standard library only.
 
 ```bash
 # macOS
@@ -97,205 +126,257 @@ winget install --id JohnMacFarlane.Pandoc
 sudo apt install python3 pandoc
 ```
 
-`--pdf` 预览需要 LibreOffice，可选。开发时用的是 pandoc 3.11。
+The optional `--pdf` preview needs LibreOffice. Developed against pandoc 3.11.
 
-## 流水线
+## Pipeline
 
 ```
-md ──pre.py──> 规整后的 md ──pandoc──> step1.docx ──post.py──> 成品 docx
+md ──pre.py──> normalized md ──pandoc──> step1.docx ──post.py──> final docx
 ```
 
-### pre.py 解决的问题
+### Problems pre.py solves
 
-| 问题 | 说明 |
+| Problem | What actually happens without it |
 |---|---|
-| `\rm` 等老式字体命令 | pandoc 的 texmath **不支持** `\rm`/`\bf`/`\it`，遇到就把**整块公式退化成 LaTeX 原文**。这是"公式变成代码"的首要原因。自动转成 `\mathrm{}` 等 |
-| `\tag{n}` | texmath 静默吞掉，编号完全丢失。这里摘出来交给 post.py |
-| **公式块内部的空行** | markdown 里空行断段，pandoc 拿不到闭合的 `$$`，**整块公式被静默吞掉**且不报警告。空行在 LaTeX 数学里无意义，直接压掉 |
-| `\boxed{}` | OMML 无对应结构，摘掉方框、改由段落边框实现 |
-| `---` 分隔线 | pandoc 的 `multiline_tables` 会把它当表格头分隔符，**把后面整段正文吞成表格里的纯文本**（`##` 都不解析）。统一改写为 `***` |
-| Obsidian `![[图片]]` | 非标准语法，pandoc 当纯文本。改写为 `![](真实路径)`，并在附件目录里递归搜文件；找不到就留醒目占位 |
-| 标题层级倒挂 | 原文有 `###` 下面挂 `##` 的情况，转 Word 后大纲和自动编号会乱。按标题文字形态（`x.y` / `x.y.z` / `（n）`）归一化 |
-| `【图占位N】` | 转成醒目占位段落 |
+| `\rm` and other legacy font commands | texmath **does not support** `\rm`/`\bf`/`\it` and silently degrades the **whole equation into literal LaTeX text** — the #1 cause of "my equations turned into code". Rewritten to `\mathrm{}` etc. |
+| `\tag{n}` | texmath drops it silently; the number vanishes completely. Extracted here, applied by post.py |
+| **Blank lines inside a `$$` block** | A blank line ends the paragraph in Markdown, so pandoc never sees a closing `$$` — **the entire equation is silently swallowed** with zero warnings. Blank lines are meaningless in LaTeX math, so they are squeezed out |
+| `\boxed{}` | OMML has no counterpart structure; the box is stripped and re-created as a paragraph border |
+| `---` horizontal rules | pandoc's `multiline_tables` treats them as table separators and **swallows the following text into table cells** (even `##` stops parsing). Rewritten to `***` |
+| Obsidian `![[image]]` embeds | Non-standard syntax that pandoc renders as plain text. Rewritten to `![](resolved-path)` with a recursive search through `--assets` directories; a loud placeholder is left if the file can't be found |
+| Inverted heading levels | `##` nested under `###` breaks the Word outline and auto-numbering. Normalized by the shape of the heading text (`x.y` / `x.y.z` / `（n）`) |
+| `【图占位N】` markers | Turned into loud placeholder paragraphs |
 
-### post.py 解决的问题
+### Problems post.py solves
 
-| 问题 | 说明 |
+| Problem | What it does |
 |---|---|
-| `aligned` 的 `&` | texmath 把对齐符当普通字符写进 OMML，公式里出现可见的 `&`。改成 OMML 正确的对齐点 `m:rPr/m:aln` |
-| 公式编号排版 | 编号公式合成一个段落：`TAB 公式 TAB （n）`，制表位排版（公式居中、编号右对齐），无表格 |
-| 图表题注 | `图 N：xxx` 段落套 Caption 样式（居中、五号、无缩进），可用于交叉引用 |
-| 块公式段落 | 统一套 `EquationPara` 样式：居中、无首行缩进 |
+| `&` in `aligned` | texmath writes alignment markers as ordinary characters — a visible `&` appears inside the equation. Rewritten into proper OMML alignment points (`m:rPr/m:aln`) |
+| Numbered-equation layout | `TAB equation TAB （n）` in a single paragraph with tab stops — centered equation, right-aligned number, no table involved |
+| Figure/table captions | `图 N：…` / `表 N：…` paragraphs get the Caption style (centered, 10.5 pt, no indent) and become cross-referenceable |
+| Display-equation paragraphs | Uniformly given the `EquationPara` style (centered, no first-line indent) |
 
-### 公式右编号与交叉引用
+### Right-aligned numbering and cross-references
 
-所有行间公式默认都给右编号，用**制表位**排版：一个段落里 `TAB 公式 TAB （n）`。
+Every display equation gets a number by default, laid out with **tab stops**: one
+paragraph containing `TAB equation TAB （n）`.
 
-早先用的是 1×3 无边框表格，已弃用——Word/WPS 会给无边框表格画屏幕**虚框**，
-虽然不打印但碍眼，而且「查看虚框」是应用级开关、存不进文件，每台机器都要手动关。
-制表位方案没有表格，也就没有虚框。`verify.py` 会检查文档里不该出现表格。
+An earlier version used a 1×3 borderless table per equation; it was abandoned
+because Word/WPS draw **screen gridlines** around borderless tables — they never
+print, but they are ugly, and "view gridlines" is an application-level toggle that
+cannot be stored in the file, so it had to be turned off manually on every machine.
+The tab-stop scheme has no table, hence no gridlines. `verify.py` checks that the
+document contains none.
 
-编号用 `SEQ` 域，正文引用用 `REF` 域指向编号书签，Word 里按 F9 联动更新。
+Numbers are `SEQ` fields; in-text references are `REF` fields pointing at numbered
+bookmarks, so pressing F9 in Word renumbers everything consistently.
 
-**重编号会打乱原有引用**，所以 pre.py 建了 `旧 \tag 号 → 新编号` 的映射，
-自动回改正文里的「式（n）」。对不上任何 `\tag` 的引用会原样保留并**报警**，
-不硬猜——源文件本身可能有悬空引用。
+**Renumbering would scramble existing references**, so pre.py builds an
+`old \tag → new number` map and rewrites the `式（n）` references in the body text.
+References that match no `\tag` are left untouched and **reported as warnings** —
+no guessing, because the source document may genuinely contain dangling references.
 
-### verify.py — 转换校验（流水线自动调用，不通过就非零退出）
+### verify.py — post-conversion checks (run automatically; non-zero exit on failure)
 
-必须有这一步。转换失败很多时候是**静默**的，不报错但内容没了。实测就抓到一次：
-原文某个 `$$` 块内部有一个空行，markdown 里空行断段，pandoc 拿不到闭合的 `$$`，
-整块公式（几十行的优化问题）凭空消失，输出里只剩两个孤立的 `$$`，而且不产生任何警告。
+This step is non-negotiable. Conversion failures are frequently **silent** — no
+error, the content is simply gone. One real case caught in development: a `$$`
+block contained a blank line, pandoc never saw the closing delimiter, and a
+multi-line optimization equation vanished without a trace — the output just had
+two orphaned `$$`, and not a single warning was emitted.
 
-校验项：
+Checks:
 
-- docx 包内所有 XML 格式合法
-- **公式数量**：源文件数出来的块公式 / 行内公式数，与 docx 里实际数量必须一致
-- **中文正文逐字比对**（剔除公式与占位文字），检出被吞的段落
-- 公式编号连续性、`\tag` 个数与编号表格个数一致
-- 无残留内部标记、无泄漏的 markdown 语法、公式里无可见 `&`
-- OOXML 结构：表格单元格必须含段落、相邻表格不得直接拼接
+- every XML part inside the docx package is well-formed
+- **equation counts**: block / inline equation counts from the source must match
+  what is actually in the docx
+- **character-by-character comparison of the CJK body text** (formulas and
+  placeholder text excluded) — catches swallowed paragraphs
+- equation-number continuity; `\tag` count matches the number of numbered equations
+- no leftover internal markers, no leaked Markdown syntax, no visible `&` inside
+  equations
+- OOXML structure: table cells must contain a paragraph; adjacent tables must not
+  be glued together
 
-## 支持 MathType / AxMath
+## MathType / AxMath support
 
-**不能直接生成。** 两者的公式在 docx 里都是 OLE 嵌入对象——MathType 是私有的 MTEF
-二进制，AxMath 是自己的格式（[AxMath 官方文档](https://axmath.gitbooks.io/axmath-docs-en/6._equation_output_and_word_plugin.html)
-明确写走 OLE）。都没有公开的写入库，还得配 EMF 预览图。而且生成出来对方没装软件也编辑不了。
+**These cannot be generated directly.** Both store equations as OLE-embedded
+objects — MathType uses the proprietary MTEF binary format, AxMath its own format
+(the [AxMath docs](https://axmath.gitbooks.io/axmath-docs-en/6._equation_output_and_word_plugin.html)
+confirm OLE). There is no public library for writing either, an EMF preview image
+is required alongside, and the result wouldn't be editable anyway on machines
+without the software installed.
 
-**正确路径是让它们自己转。** 两条路：
+**The right approach is to let them do the converting.** Two routes:
 
-### 路线 A：OMML 中转（用默认的 omml 模式产物）
+### Route A: via OMML (using the default output)
 
-Word 里 MathType 选项卡 → Convert Equations → 输入选 OMML equations、输出选
-MathType equations、范围选 Whole document。官方文档写明支持整篇或选区
-（[Typefi 说明](https://help.typefi.com/hc/en-us/articles/360001608675-Add-and-edit-equations-with-MathType-Writer)）。
+In Word: MathType tab → Convert Equations → input "Word 2007 and later (OMML)
+equations", output "MathType equations", scope "Whole document". This is officially
+documented ([Typefi notes](https://help.typefi.com/hc/en-us/articles/360001608675-Add-and-edit-equations-with-MathType-Writer)).
 
-**这条路不是无损的。** WIRIS 官方有专门的故障文档：
-[OMML 转换报错](https://wiris.helpjuice.com/en_US/conversion-and-compatibility/error-message-problem-converting-omml-to-mathml)、
-[符号丢失](https://docs.wiris.com/en_US/conversion-and-compatibility/symbols-missing-in-equations-converted-from-words-equation-editor-to-mathtype)
-——OMML 里视觉相同的符号编码可能不同，MathType 会解释错。转完必须抽查。
+**This route is not lossless.** WIRIS maintains dedicated troubleshooting pages for
+[OMML conversion errors](https://wiris.helpjuice.com/en_US/conversion-and-compatibility/error-message-problem-converting-omml-to-mathml)
+and [missing symbols](https://docs.wiris.com/en_US/conversion-and-compatibility/symbols-missing-in-equations-converted-from-words-equation-editor-to-mathtype)
+— visually identical symbols can have different encodings in OMML, and MathType may
+misinterpret them. Spot-check after converting.
 
-### 路线 B：LaTeX 源码中转（`--math-mode latex`）
+### Route B: via LaTeX source (`--math-mode latex`)
 
-跳过 texmath，公式以 LaTeX 源码形式落进 docx（蓝色等宽的 `MathSource` 字符样式，
-肉眼一眼能认出哪些还没转），再让 MathType / AxMath 自己解析。
+Skips texmath entirely: equations land in the docx as LaTeX source (a blue
+monospace `MathSource` character style, so unconverted ones are visible at a
+glance), and MathType / AxMath parse them themselves.
 
-**优势**：绕开 texmath 的短板。`\boxed`、复杂 `aligned` 这些在 omml 模式下会降级处理的
-结构，这里原样交给更强的解析器。`--math-mode latex` 下 `\boxed` 也不再被摘除。
+**Advantage**: bypasses texmath's weak spots. `\boxed` and complex `aligned` —
+structures that omml mode degrades — pass through untouched to the stronger
+parser. `\boxed` is no longer stripped in this mode.
 
-配套 VBA 宏在 `mathtype_axmath.bas`，操作步骤见 **[WINDOWS.md](WINDOWS.md)**。
-关键一点：**先运行 `ProbeEquationMacros` 探测**，别直接跑转换宏。
-MathType / AxMath 都没有公开稳定的 VBA 接口文档，宏名靠探测确定，探测不到就走 GUI。
+The companion VBA macros are in `mathtype_axmath.bas`; the walkthrough is in
+[WINDOWS.md](WINDOWS.md) (in Chinese). Key point: **run `ProbeEquationMacros`
+first**, don't fire the conversion macros blindly. Neither MathType nor AxMath
+publishes a stable VBA interface; macro names are determined by probing, and if
+probing finds nothing, the documented GUI path is used instead.
 
-### 平台现实
+### Platform reality
 
-- **AxMath 只有 Windows 版**，GitHub 上只发 .exe。macOS 装不了。
-- MathType 有 Mac 版，但 Convert Equations 是 **MS Word 加载项**功能，WPS 用不了。
-- 所以这两条路的最后一步都得在 **Windows + MS Word** 的机器上做。
+- **AxMath is Windows-only** — its GitHub releases ship only .exe files. It cannot
+  be installed on macOS.
+- MathType has a Mac version, but Convert Equations is an **MS Word add-in**
+  feature and doesn't exist in WPS.
+- So the final step of both routes has to happen on a **Windows + MS Word** machine.
 
-### 先想清楚要不要走
+### Think before you go
 
-OMML 是 Word 原生格式，WPS 和 Word 都能直接双击编辑，不需要装插件，评审专家打开也不会
-缺插件缺字体。MathType / AxMath 的正当理由通常只有三个：单位模板硬性规定、要用它们的
-公式编号+交叉引用体系、协作者习惯。只是想要"能编辑的公式"的话，默认 omml 模式已经够了。
+OMML is Word's native format. Word and WPS edit it directly with no plugins, and
+reviewers won't hit missing plugins or fonts when they open the file. The
+legitimate reasons for MathType / AxMath usually boil down to three: the template
+mandates it, you want their equation-numbering + cross-reference system, or your
+collaborators are used to it. If you just want "editable equations", the default
+omml mode already delivers that.
 
-### make_reference.py — 排版样式模板
+### make_reference.py — the style template
 
-生成 `reference.docx`。改 `SPEC` 字典即可适配不同单位的模板要求，
-不需要手工在 Word 里调样式。当前设置：
+Generates `reference.docx`. Adapt the `SPEC` dict to your institution's template
+without hand-tuning styles in Word. Current settings:
 
-| 元素 | 规格 |
+| Element | Spec |
 |---|---|
-| 正文 | 宋体 / Times New Roman，小四(12pt)，1.5 倍行距，首行缩进 2 字符 |
-| 一级标题 | 黑体，三号(16pt)，居中 |
-| 二级标题 | 黑体，四号(14pt)，左对齐 |
-| 三/四级标题 | 黑体，小四(12pt)，左对齐 |
-| 引用块 | 楷体，小四 |
-| 图表题注 | 宋体，五号(10.5pt)，居中 |
-| 页面 | A4，上下 2.54cm，左右 3.17cm |
-| 公式字体 | Cambria Math（`--math-font` 可改） |
+| Body text | SimSun / Times New Roman, 12 pt, 1.5× line spacing, 2-character first-line indent |
+| Heading 1 | SimHei, 16 pt, centered |
+| Heading 2 | SimHei, 14 pt, left |
+| Headings 3/4 | SimHei, 12 pt, left |
+| Block quotes | KaiTi, 12 pt |
+| Captions | SimSun, 10.5 pt, centered |
+| Page | A4, 2.54 cm top/bottom, 3.17 cm left/right |
+| Equation font | Cambria Math (change with `--math-font`) |
 
-改完样式后重新生成：
+Regenerate after changing styles:
 
 ```bash
 python3 make_reference.py reference.docx
 ```
 
-## 已验证结果
+## Verified results
 
-`example/sample.md`（205 行）在 **12 种参数组合**下全部通过 verify.py：
-`omml`/`latex` × `plain`/`chapter` 编号样式 × `all`/`tag`/`none` 编号范围。
+`example/sample.md` (205 lines) passes verify.py under **all 12 option
+combinations**: `omml`/`latex` × `plain`/`chapter` numbering × `all`/`tag`/`none`
+numbering scope.
 
-- 转换过程零 pandoc 警告
-- 块公式 10/10，行内公式 18/18
-- 右编号 10/10，编号连续无缺
-- 正文交叉引用全部回改并做成 REF 域
-- 中文正文逐字比对 825/825，零内容丢失
-- 所有 XML 通过格式合法性校验；无公式编号表格（因而无屏幕虚框）
+- zero pandoc warnings during conversion
+- block equations 10/10, inline equations 18/18
+- right-aligned numbers 10/10, consecutive, none missing
+- all in-text cross-references remapped and turned into REF fields
+- CJK body text compared character by character: 825/825, zero content loss
+- all XML well-formed; no equation-numbering tables (hence no screen gridlines)
 
-另外在一份 1700 余行、含 350 多个公式的真实申报书上验证通过（该文档未公开）。
+Additionally validated on a real 1700+ line proposal containing 350+ equations
+(document not public).
 
-开发过程中 verify.py 抓到过四次**静默**内容丢失，都是不报错但东西没了：
+During development verify.py caught **four** silent content losses — no error, the
+content was simply gone:
 
-1. `$$` 块内部有空行 → 整块公式消失，只剩两个孤立的 `$$`
-2. 给所有公式编号后，「正文 + 公式同段」的段落被整段丢弃 → 正文和行内公式一起没了
-3. latex 模式下同类混排段落的公式拿不到编号
-4. 文档正文里用反引号写了 `` `$$` ``（在讲语法本身），被当成公式定界符，
-   导致后面所有公式配对错位
+1. a blank line inside a `$$` block → the whole equation vanished, leaving two
+   orphaned `$$`
+2. after numbering all equations, paragraphs mixing "body text + equation" were
+   dropped entirely → both the text and its inline equations disappeared
+3. in latex mode, equations in such mixed paragraphs didn't get numbers
+4. a backtick-quoted `` `$$` `` in the body text (the document was explaining the
+   syntax itself) was treated as a math delimiter, mispairing every equation
+   after it
 
-前两次都是因为只比对了中文正文、没校验公式数量才漏掉的。**这就是 verify.py 存在的理由。**
+The first two slipped through precisely because only the Chinese text was compared
+and equation counts weren't checked. **That is why verify.py exists.**
 
-## 已知限制
+## Known limitations
 
-- omml 模式下 `\boxed` 用段落边框近似，边框是整段宽度，不是紧贴公式。
-  latex 模式下 `\boxed` 原样保留，交给 MathType / AxMath 处理。
-- 重编号时，正文里对不上任何原有 `\tag` 的引用会**原样保留并报警**，不做猜测。
-  源文档本身可能有悬空引用（比如某节公式在 md 里整节缺失），这种必须人工处理。
-- `--number-style chapter` 用静态编号文本，在 Word 里按 F9 不会自动重编号
-  （`plain` 样式用 SEQ 域，可以）。因为「2-1」这种带章号的格式要叠 STYLEREF，
-  兼容性和可读性都更差。
-- 找不到的图片会输出红黄底的醒目占位，需手工回填；给了 `--assets` 目录可自动解析。
+- In omml mode `\boxed` is approximated with a paragraph border spanning the full
+  paragraph width, not hugging the equation. In latex mode `\boxed` is preserved
+  and left to MathType / AxMath.
+- When renumbering, references that match no original `\tag` are **left as-is and
+  reported** — no guessing. The source may genuinely contain dangling references
+  (e.g. a whole section missing from the md); those need manual attention.
+- `--number-style chapter` uses static number text; F9 does not renumber it in
+  Word (`plain` uses SEQ fields and does). Chapter-style numbers like "2-1" would
+  require stacking STYLEREF, which is worse for compatibility and readability.
+- Images that can't be found become a loud red/yellow placeholder for manual
+  backfill; `--assets` directories enable automatic resolution.
 
-## 尚未程序化验证的部分
+## Not yet programmatically verified
 
-- **OMML 在 WPS / Word 里的实际渲染。** 开发机是 macOS，LibreOffice 在上面找不到
-  能绘制 CJK 的字体，栅格化时中文全空（PDF 文字层里汉字都在，是纯栅格化问题）。
-  结构层面全部校验通过，但字体、字号、行距的观感需要人工打开确认。
-- **`mathtype_axmath.bas` 里的 VBA 一行都没跑过**（macOS 跑不了 Word 宏）。
-  不依赖插件的四个宏（`UpdateAllFields` / `SelectLatexEquations` /
-  `CountLatexEquations` / `CleanupAfterConvert`）用的都是标准 Word 对象模型；
-  依赖插件的两个转换宏靠运行时探测确定接口，探测失败会明确降级到 GUI 流程。
-  欢迎在 Windows 上跑 `ProbeEquationMacros` 并把结果反馈到 issue。
+- **How OMML actually renders in WPS / Word.** The dev machine is macOS, where
+  LibreOffice finds no CJK-capable font for rasterization (Chinese comes out
+  blank; the PDF text layer is intact — purely a rasterization issue). Everything
+  structural is verified; the look of fonts, sizes and spacing needs a human to
+  open the file.
+- **Not a single line of the VBA in `mathtype_axmath.bas` has been executed**
+  (macros don't run on macOS). The four plugin-free macros (`UpdateAllFields` /
+  `SelectLatexEquations` / `CountLatexEquations` / `CleanupAfterConvert`) use only
+  the standard Word object model; the two conversion macros probe for plugin
+  interfaces at runtime and degrade explicitly to the GUI path when probing fails.
+  If you're on Windows, please run `ProbeEquationMacros` and report the result in
+  an issue.
 
-## 其他踩过的坑
+## Other traps we hit
 
-- **Word 按样式「名称」匹配，不是 styleId。** `Find.Style` 和 `Styles()` 都用 name。
-  把 `MathSource` 的 name 写成 `Math Source (LaTeX)` 会让整套 VBA 一个都找不到。
-- **pandoc 输出的自闭合标签带空格**（`<w:pStyle w:val="X" />`），自己拼的通常不带。
-  两种混在一个文档里，任何按字面写 `w:val="X"/>` 的正则都会静默漏掉一半。
-  `post.normalize_xml()` 在入口统一归一化，根治这一类 bug。
-- **`grep -c` 返回 0 不代表成功。** 有一次 pandoc 因 YAML 解析失败根本没产出文件，
-  但 grep 计数是 0，看着像通过。**必须验证产物存在。**
-- bash 里变量后紧跟全角字符要写 `${VAR}`。`"$MODE）"` 会把全角括号的 UTF-8 字节
-  当成变量名的一部分，配合 `set -u` 直接报 unbound variable。
+- **Word matches styles by *name*, not styleId.** Both `Find.Style` and `Styles()`
+  take the name. Name the `MathSource` style `Math Source (LaTeX)` and none of the
+  VBA will find anything.
+- **pandoc emits self-closing tags with a trailing space** (`<w:pStyle w:val="X" />`);
+  hand-built XML usually doesn't. Mix both in one document and any regex written
+  against the literal `w:val="X"/>` silently matches only half of them.
+  `post.normalize_xml()` normalizes at the entry point, fixing this class of bug
+  at the root.
+- **`grep -c` returning 0 is not success.** Once, pandoc failed on a YAML error
+  and produced no file at all — but the grep count was 0, which looked like a
+  pass. **Always assert the artifact exists.**
+- In bash, a variable followed immediately by a full-width character needs
+  `${VAR}`. `"$MODE）"` treats the UTF-8 bytes of the full-width paren as part of
+  the variable name, which blows up with `set -u`.
 
-## 反馈与贡献
+## Contributing
 
-- **转换出问题**：附上能复现的最小 .md 片段、完整命令与控制台输出；加 `--keep-temp`
-  把中间文件一并贴出来，定位会快很多。
-- **Windows 用户**：`mathtype_axmath.bas` 里 `ProbeEquationMacros` 的探测报告对固化
-  MathType / AxMath 宏名非常有价值，直接开 issue 贴出来即可。
-- **提 PR 前**先跑 `./example/run_tests.sh`，12 种参数组合全过再提。
-- 英文文档支持（`Eq. (n)` 引用回改、`Figure 1:` 题注识别）是范围明确的欢迎贡献，
-  缺口清单见 [README.en.md](README.en.md) 的 Why "NSFC" 一节。
+- **Bug reports**: attach a minimal .md snippet that reproduces the issue, the
+  exact command, and the full console output. Running with `--keep-temp` and
+  including the intermediate files makes locating the problem much faster.
+- **Windows users**: the report produced by `ProbeEquationMacros` (pasted into an
+  issue) is exactly what's needed to pin down the MathType/AxMath macro names for
+  everyone else.
+- **Pull requests**: run `./example/run_tests.sh` first; all 12 combinations must
+  pass.
+- **English-language support** (`Eq. (n)` reference rewriting, `Figure 1:`
+  caption detection) is a welcome, well-scoped contribution — see the table in
+  [Why "NSFC"?](#why-nsfc).
 
-## 开源声明
+## License
 
-- 代码以 **[MIT](LICENSE)** 许可。仓库不含任何 GPL 数据：自动生成的 `reference-*.docx`
-  样式模板派生自 pandoc 自带模板（pandoc 为 GPL v2+），已在 `.gitignore` 排除、
-  不随仓库分发，首次运行时由你本机的 pandoc 现场生成。把本项目打包成闭源产品时
-  **不要附带这些生成物**。
-- 本项目与国家自然科学基金委员会、Microsoft（Word）、金山（WPS）、Wiris（MathType）、
-  AxMath 均无关联，相关名称仅用于描述兼容性。
-- 本流水线建立在 [pandoc](https://pandoc.org) 之上，感谢 John MacFarlane
-  与 texmath 的贡献者。
+[MIT](LICENSE) — with one caveat: the auto-generated `reference-*.docx` style
+templates derive from pandoc's own `data/reference.docx`, and pandoc is GPL (v2+).
+Those files are gitignored, not distributed with this repository, and are generated
+locally by *your* pandoc on first run. If you bundle this project into a
+closed-source product, do not ship those generated templates.
+
+This project is not affiliated with, endorsed by, or sponsored by the National
+Natural Science Foundation of China, Microsoft, Kingsoft, Wiris (MathType), or
+AxMath. All product names are used solely to describe compatibility.
+
+Built on top of [pandoc](https://pandoc.org) — thanks to John MacFarlane and the
+texmath contributors.

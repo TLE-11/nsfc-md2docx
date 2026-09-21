@@ -154,7 +154,7 @@ def main():
        1. 打开 docx，按 Alt+F11 进 VBA 编辑器
        2. 文件 -> 导入文件，选 mathtype_axmath.bas（仓库根目录）
        3. 运行 ConvertLatexToMathType 或 ConvertLatexToAxMath
-       详见 README.md 的「支持 MathType / AxMath」一节""")
+       详见 README_cn.md 的「支持 MathType / AxMath」一节""")
 
 
 if __name__ == '__main__':
