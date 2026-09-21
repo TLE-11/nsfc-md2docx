@@ -44,6 +44,41 @@ def split_code(text):
     return parts
 
 
+def map_noncode(text, fn):
+    """对非代码片段套用函数，代码片段原样保留。
+
+    图片 wikilink、【图占位】、"式（n）"回改这类针对正文的替换都必须走这里：
+    代码块/行内代码里的同样字样是字面文字，改了就是静默篡改，而且 verify 的
+    正文比对两侧都剔代码区，查不出来。
+    """
+    return ''.join(chunk if is_code else fn(chunk)
+                   for is_code, chunk in split_code(text))
+
+
+# 围栏代码块开关：与 CODE_RE 口径一致（行首 ``` 或 ~~~，闭合围栏不短于开启）。
+FENCE_RE = re.compile(r'^(`{3,}|~{3,})')
+
+
+def iter_noncode_lines(text):
+    """逐行产出 (是否代码行, 行文本)。围栏行本身算代码行。
+
+    行级扫描（标题归一化、分隔线消歧、编号分配）都用它跳过代码块：
+    代码里的 `# 5 注释`、`---`、公式标记都只是字面文字。
+    """
+    fence = None
+    for ln in text.split('\n'):
+        fm = FENCE_RE.match(ln)
+        if fm:
+            mark = fm.group(1)
+            if fence is None:
+                fence = mark
+            elif mark[0] == fence[0] and len(mark) >= len(fence):
+                fence = None
+            yield True, ln
+        else:
+            yield fence is not None, ln
+
+
 def map_math(text, fn_block, fn_inline):
     """分别对块公式与行内公式套用函数，不触碰正文，也不触碰代码区域。"""
     def on_plain(seg):
@@ -215,32 +250,34 @@ def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
         path = resolve(name)
         if path:
             stats['img_found'] += 1
-            return '![](%s)' % path
+            # 尖括号包裹路径：含空格（中文文件名/目录很常见）或 Windows 反斜杠时
+            # 裸写会被 markdown 从空格处截断或把 \ 当转义符，<> 内一律按字面解析
+            return '![](<%s>)' % path
         stats['img_missing'].append(name)
         return '⟦MISSINGIMG:%s⟧' % name
 
-    text = re.sub(r'!\[\[([^\]]+)\]\]', on_wikiimg, text)
+    text = map_noncode(text, lambda s: re.sub(r'!\[\[([^\]]+)\]\]', on_wikiimg, s))
 
     # --- 6: 图占位 ------------------------------------------------------
     def on_ph(m):
         stats['placeholders'] += 1
         return '⟦FIGPH⟧' + m.group(1)
 
-    text = re.sub(r'【(图占位[^】]*)】', on_ph, text)
+    text = map_noncode(text, lambda s: re.sub(r'【(图占位[^】]*)】', on_ph, s))
 
     # --- 5/7: 标题层级归一化 + 分隔线消歧 --------------------------------
-    lines = text.split('\n')
-    fixed, stack, in_code = [], [], False
-    for ln in lines:
-        if ln.lstrip().startswith('```'):
-            in_code = not in_code
+    fixed = []
+    for in_code, ln in iter_noncode_lines(text):
+        if in_code:
+            fixed.append(ln)
+            continue
         # 独立的 --- / ___ 分隔线：pandoc 的 multiline_tables 会把它当表格头
         # 分隔符，从而把后面整段正文吞成表格里的纯文本。统一改写为 ***。
-        if not in_code and re.match(r'^\s*(-{3,}|_{3,})\s*$', ln):
+        if re.match(r'^\s*(-{3,}|_{3,})\s*$', ln):
             stats['hr_normalized'] += 1
             fixed.append('***')
             continue
-        h = None if in_code else re.match(r'^(#{1,6})\s+(.*)$', ln)
+        h = re.match(r'^(#{1,6})\s+(.*)$', ln)
         if not h:
             fixed.append(ln)
             continue
@@ -260,7 +297,6 @@ def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
             stats['heading_fixed'].append('%s -> %s  %s' % ('#' * lvl, '#' * want, title[:40]))
             lvl = want
         fixed.append('#' * lvl + ' ' + title)
-        stack.append(lvl)
     text = '\n'.join(fixed)
 
     # --- 8: 公式编号分配 + 正文交叉引用回改 ------------------------------
@@ -292,7 +328,10 @@ def assign_numbers(text, stats, number='all', style='plain'):
     chapter = None
     out_lines = []
 
-    for ln in text.split('\n'):
+    for in_code, ln in iter_noncode_lines(text):
+        if in_code:
+            out_lines.append(ln)
+            continue
         h = H1_NUM.match(ln)
         if h:
             chapter = h.group(1)
@@ -332,7 +371,8 @@ def assign_numbers(text, stats, number='all', style='plain'):
         stats['ref_unresolved'].append(m.group(0))
         return m.group(0)
 
-    text = REF_RE.sub(on_ref, text)
+    # 代码区里的"式（n）"是字面文字，不能改成 REF 域
+    text = map_noncode(text, lambda s: REF_RE.sub(on_ref, s))
     return text
 
 

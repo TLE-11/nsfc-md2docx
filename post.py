@@ -136,7 +136,10 @@ def red_run(text):
 # ------------------------------------------------------------------- 主逻辑
 
 PARA_RE = re.compile(r'<w:p(?:\s[^>]*)?>.*?</w:p>|<w:p\s*/>', re.S)
-CAPTION_RE = re.compile(r'^\s*(图|表)\s*\d+\s*[：:.]')
+# 只认冒号形态「图 N：/ 表 N:」。不能放行 '.'：「图 3.1 展示了……」是论文里
+# 极常见的正文句式，会连同小数点一起被误判成题注（居中、小五号、丢首行缩进），
+# 而逐字校验查不出样式层面的错误。
+CAPTION_RE = re.compile(r'^\s*(图|表)\s*\d+\s*[：:]')
 
 
 def plain(x):
@@ -439,7 +442,8 @@ def process(xml, stats, math_list=None, seq_field=True):
             continue
 
         # --- 5: 图表题注 --------------------------------------------
-        if CAPTION_RE.match(txt) and len(txt) < 120:
+        # SourceCode 段落排除：代码块里的「图 1：xxx」是字面文字，不是题注
+        if CAPTION_RE.match(txt) and len(txt) < 120 and 'SourceCode' not in x:
             out.append(set_style(x, 'Caption'))
             stats['caption'] += 1
             i += 1

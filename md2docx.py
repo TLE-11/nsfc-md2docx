@@ -85,6 +85,10 @@ def main():
     if not os.path.exists(a.src):
         sys.exit('找不到输入文件: %s' % a.src)
     out = a.out or (os.path.splitext(a.src)[0] + '.docx')
+    # -o 指向不存在的目录时自动创建，否则要到 post.py 落盘才报一串 traceback
+    out_dir = os.path.dirname(os.path.abspath(out))
+    if not os.path.isdir(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
     pandoc = which_pandoc()
     py = sys.executable
 
@@ -146,7 +150,12 @@ def main():
             subprocess.run([so, '--headless', '--convert-to', 'pdf', out,
                             '--outdir', d], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
-            print('[pipe] PDF 预览 -> %s' % (os.path.splitext(out)[0] + '.pdf'))
+            # LibreOffice 转换失败时退出码也可能是 0，只能看产物说话
+            pdf = os.path.splitext(out)[0] + '.pdf'
+            if os.path.exists(pdf):
+                print('[pipe] PDF 预览 -> %s' % pdf)
+            else:
+                print('[pipe] 注意：LibreOffice 未产出 PDF，跳过预览')
 
     if a.math_mode == 'latex':
         print("""

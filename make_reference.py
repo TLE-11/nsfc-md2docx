@@ -15,11 +15,29 @@ import argparse
 import re
 import shutil
 import subprocess
+import sys
 import zipfile
 import os
 import tempfile
 
 W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+
+
+def which_pandoc():
+    """与 md2docx.py 同一套查找逻辑：Windows 上装完 pandoc 没重启终端时，
+    PATH 里可能还没有，直接 subprocess 'pandoc' 会抛 FileNotFoundError。"""
+    p = shutil.which('pandoc')
+    if p:
+        return p
+    for c in (os.path.expandvars(r'%LOCALAPPDATA%\Pandoc\pandoc.exe'),
+              r'C:\Program Files\Pandoc\pandoc.exe'):
+        if os.path.exists(c):
+            return c
+    sys.exit('找不到 pandoc。装法：\n'
+             '  Windows : winget install --id JohnMacFarlane.Pandoc\n'
+             '            或 choco install pandoc\n'
+             '  macOS   : brew install pandoc\n'
+             '  Linux   : apt install pandoc')
 
 # ---------------------------------------------------------------- 排版规范
 
@@ -186,7 +204,7 @@ def main():
     a = ap.parse_args()
     fonts = FONT_PROFILES[a.font_profile]
 
-    base = subprocess.run(['pandoc', '--print-default-data-file', 'reference.docx'],
+    base = subprocess.run([which_pandoc(), '--print-default-data-file', 'reference.docx'],
                           capture_output=True, check=True).stdout
     tmp = tempfile.mkdtemp()
     src = os.path.join(tmp, 'base.docx')

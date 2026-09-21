@@ -99,7 +99,14 @@ def main():
     md_body = pre.MATH_BLOCK.sub('', md_body)
     md_body = pre.MATH_INLINE.sub('', md_body)
     md_body = re.sub(r'!\[\[[^\]]*\]\]', '', md_body)
-    docx_text = re.sub(r'<m:oMath[^>]*>.*?</m:oMath>', '', s, flags=re.S)
+    # 源侧已剔除代码区（noncode），产物侧也必须剔除代码段落与行内代码，
+    # 否则代码里的中文注释会被判成"多出的正文"，转换正确也报校验失败
+    docx_text = re.sub(r'<w:p(?:\s[^>]*)?>(?:(?!</w:p>).)*?'
+                       r'<w:pStyle w:val="SourceCode"/>(?:(?!</w:p>).)*?</w:p>',
+                       '', s, flags=re.S)
+    docx_text = re.sub(r'<w:r>(?:(?!</w:r>).)*?<w:rStyle w:val="VerbatimChar"/>'
+                       r'(?:(?!</w:r>).)*?</w:r>', '', docx_text, flags=re.S)
+    docx_text = re.sub(r'<m:oMath[^>]*>.*?</m:oMath>', '', docx_text, flags=re.S)
     # latex 模式下公式是文本 run，必须一并剔除，否则 \text{中文} 里的汉字会被误算
     docx_text = re.sub(r'<w:r><w:rPr><w:rStyle w:val="MathSource"/></w:rPr>'
                        r'<w:t[^>]*>.*?</w:t></w:r>', '', docx_text, flags=re.S)
