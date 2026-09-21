@@ -11,6 +11,16 @@ DOCS=("example/sample.md" "$@")
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# BOM + CRLF 变体：Windows 编辑器产物的典型形态。BOM 曾让首个标题匹配不上
+# 行首正则（chapter 编号静默错乱），必须有回归保护。
+CRLF="$TMP/sample_crlf_bom.md"
+python3 - "$CRLF" <<'EOF'
+import sys
+raw = open('example/sample.md', encoding='utf-8').read().replace('\n', '\r\n')
+open(sys.argv[1], 'w', encoding='utf-8-sig', newline='').write(raw)
+EOF
+DOCS+=("$CRLF")
+
 ok=0; fail=0
 for doc in "${DOCS[@]}"; do
   name="$(basename "$doc")"

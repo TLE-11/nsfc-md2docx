@@ -18,6 +18,16 @@ import os
 import re
 import sys
 
+
+def _console_safe():
+    """Windows GBK 控制台打印 ⟦⟧ 等私用符号（或 GBK 之外的生僻字）会
+    UnicodeEncodeError，把真正的报错/警告变成二次崩溃。降级为替换字符。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors='replace')
+        except Exception:
+            pass
+
 # ---------------------------------------------------------------- 数学区域切分
 
 MATH_BLOCK = re.compile(r'(?<!\\)\$\$(.+?)(?<!\\)\$\$', re.S)
@@ -238,12 +248,18 @@ def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
     text = map_math(text, on_block, on_inline)
 
     # --- 4: Obsidian wikilink 图片 --------------------------------------
+    # 一次性建文件名索引：原实现每张图都全目录 os.walk，图多目录大时是 O(图x目录)
+    img_index = {}
+    for d in assets_dirs:
+        if not os.path.isdir(d):
+            stats['assets_bad'].append(d)
+            continue
+        for root, _dirs, files in os.walk(d):
+            for f in files:
+                img_index.setdefault(f, os.path.join(root, f))
+
     def resolve(name):
-        for d in assets_dirs:
-            for root, _dirs, files in os.walk(d):
-                if name in files:
-                    return os.path.join(root, name)
-        return None
+        return img_index.get(name)
 
     def on_wikiimg(m):
         name = m.group(1).split('|')[0].strip()
@@ -390,15 +406,18 @@ def main():
     ap.add_argument('--number-style', choices=['plain', 'chapter'], default='plain',
                     help='plain=全文连续(1)(2)...; chapter=按章 (2-1)(3-1)...')
     a = ap.parse_args()
+    _console_safe()
 
     stats = {'font_fixed': 0, 'font_unbalanced': 0, 'tags': 0, 'boxed': 0,
              'img_found': 0, 'img_missing': [], 'placeholders': 0,
              'heading_fixed': [], 'hr_normalized': 0, 'math_latex': 0,
              'blank_in_math': 0, 'math_blocks': 0, 'math_inline': 0,
              'eq_numbered': 0, 'ref_remapped': 0, 'ref_unresolved': [],
-             'dup_tags': []}
+             'dup_tags': [], 'assets_bad': []}
     math_sink = []
-    text = open(a.src, encoding='utf-8').read()
+    # utf-8-sig：Windows 编辑器常写 BOM，留在文本里会让首个 '# 1、' 标题
+    # 匹配不上行首正则——chapter 模式下第一章公式编号静默回退成全局序号
+    text = open(a.src, encoding='utf-8-sig').read()
     out = process(text, a.assets, stats, a.math_mode, math_sink,
                   a.number, a.number_style)
     open(a.dst, 'w', encoding='utf-8').write(out)
@@ -421,6 +440,9 @@ def main():
     print('[pre] \\boxed 摘除 %d 处' % stats['boxed'])
     print('[pre] 图片解析成功 %d 张，缺失 %d 张 %s'
           % (stats['img_found'], len(stats['img_missing']), stats['img_missing'] or ''))
+    if stats['assets_bad']:
+        print('[pre] 注意：--assets 目录不存在（图片将全部按缺失处理）: %s'
+              % '、'.join(stats['assets_bad']))
     print('[pre] 图占位 %d 处' % stats['placeholders'])
     print('[pre] 分隔线消歧 %d 处（--- -> ***，防被当表格吞正文）' % stats['hr_normalized'])
     print('[pre] 公式内空行压缩 %d 处（否则该公式会被 pandoc 整块吞掉）' % stats['blank_in_math'])

@@ -22,6 +22,15 @@ import post  # noqa: E402
 import pre  # noqa: E402
 
 
+def _console_safe():
+    """Windows GBK 控制台打印 GBK 之外的字符会 UnicodeEncodeError，掩盖真实报错。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors='replace')
+        except Exception:
+            pass
+
+
 def cjk(t):
     return ''.join(c for c in t if '\u4e00' <= c <= '\u9fff')
 
@@ -33,12 +42,14 @@ def main():
     ap.add_argument('--math-mode', default='omml')
     ap.add_argument('--number', default='all', choices=['all', 'tag', 'none'])
     a = ap.parse_args()
+    _console_safe()
 
     fail = []
     warn = []
 
     # ---- 源文件侧清点（复用 pre.py 的同一套切分逻辑，同样跳过代码区域）----
-    raw = open(a.src_md, encoding='utf-8').read()
+    # utf-8-sig 与 pre.py 口径一致，否则带 BOM 时两侧首行标题判定不一致
+    raw = open(a.src_md, encoding='utf-8-sig').read()
     noncode = ''.join(c for is_code, c in pre.split_code(raw) if not is_code)
     n_block = len(pre.MATH_BLOCK.findall(noncode))
     n_inline = len(pre.MATH_INLINE.findall(pre.MATH_BLOCK.sub('', noncode)))

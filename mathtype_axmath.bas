@@ -158,12 +158,15 @@ Private Function AllCandidates() As Variant
 End Function
 
 Private Function MacroCallable(ByVal macroName As String) As Boolean
-    ' 用一个不可能的参数去调，靠错误号区分「宏不存在」和「宏存在但参数不对」
+    ' 靠错误号区分「宏不存在」和「宏存在但参数不对」：
+    '   429 / 5111 = Word 找不到这个宏（不可用）
+    '   0 或其它错误号（如参数不匹配）= 宏是存在的（可用）
+    ' 注意不能只认 Err.Number = 0：需要参数的宏无参调用必报错，
+    ' 但报错恰恰证明宏存在。
     On Error Resume Next
     Err.Clear
     Application.Run macroName
-    ' 5 / 待用宏不存在时 Word 一般报 429 或 5111；能跑通或报参数错都说明名字存在
-    MacroCallable = (Err.Number = 0)
+    MacroCallable = (Err.Number <> 429) And (Err.Number <> 5111)
     On Error GoTo 0
 End Function
 
@@ -231,9 +234,14 @@ Private Sub ConvertWith(ByVal macroName As String, ByVal label As String)
 
     Application.ScreenUpdating = False
     ' 从后往前找：转换会改变文档长度，倒序处理不会让位置失效
+    ' guard 是死循环保险：宏返回成功（Err=0）但没真正消耗源码（MathSource 样式还在）
+    ' 时，下一轮会找到同一处，okN 无限上涨、Word 卡死。上限按总数放宽一倍。
+    Dim guard As Long
     Do
         Set r = FindLastMathSource()
         If r Is Nothing Then Exit Do
+        guard = guard + 1
+        If guard > total * 2 + 10 Then Exit Do
         r.Select
         On Error Resume Next
         Err.Clear
@@ -249,7 +257,8 @@ Private Sub ConvertWith(ByVal macroName As String, ByVal label As String)
     Loop
     Application.ScreenUpdating = True
 
-    MsgBox label & " 转换完成：成功 " & okN & " 处，失败 " & failN & " 处。" & vbCrLf & vbCrLf & _
+    MsgBox label & " 转换完成：成功 " & okN & " 处，失败 " & failN & _
+           " 处，剩余未转 " & CountRemaining() & " 处。" & vbCrLf & vbCrLf & _
            "请务必抽查符号是否正确——TeX/OMML 转 " & label & " 已知会漏掉一些形近异码符号。" & vbCrLf & _
            "然后运行 UpdateAllFields 刷新公式编号与引用。", vbInformation
 End Sub

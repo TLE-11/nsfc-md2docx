@@ -17,7 +17,18 @@ import json
 import os
 import re
 import shutil
+import sys
 import zipfile
+
+
+def _console_safe():
+    """Windows GBK 控制台打印 ⟦⟧ 等私用符号（或 GBK 之外的生僻字）会
+    UnicodeEncodeError，把真正的报错/警告变成二次崩溃。降级为替换字符。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors='replace')
+        except Exception:
+            pass
 
 # ------------------------------------------------------------------ XML 片段
 
@@ -131,6 +142,36 @@ def red_run(text):
     return ('<w:r><w:rPr><w:color w:val="C00000"/><w:b/>'
             '<w:highlight w:val="yellow"/></w:rPr>'
             '<w:t xml:space="preserve">%s</w:t></w:r>' % text)
+
+
+def replace_token_runs(para_xml, token_re, make_xml):
+    """把段落里 token 命中的文本换成自定义 run，保持前后文字与原字符样式。
+
+    直接对段落 XML 做字符串替换会把 <w:r> 嵌进 <w:t> 里（非法嵌套），
+    必须按 run 拆开：前文 run + 新 run + 后文 run。token 跨 run 时匹配不到，
+    调用方应检查替换后标记是否还在，再决定 fallback。
+    """
+    def on_run(m):
+        run = m.group(0)
+        tm = re.search(r'<w:t(?:\s[^>]*)?>(.*?)</w:t>', run, re.S)
+        if not tm or not token_re.search(tm.group(1)):
+            return run
+        text = tm.group(1)
+        rpr_m = re.search(r'<w:rPr>.*?</w:rPr>', run, re.S)
+        rpr = rpr_m.group(0) if rpr_m else ''
+        out, pos = [], 0
+        for t in token_re.finditer(text):
+            if t.start() > pos:
+                out.append('<w:r>%s<w:t xml:space="preserve">%s</w:t></w:r>'
+                           % (rpr, text[pos:t.start()]))
+            out.append(make_xml(t))
+            pos = t.end()
+        if pos < len(text):
+            out.append('<w:r>%s<w:t xml:space="preserve">%s</w:t></w:r>'
+                       % (rpr, text[pos:]))
+        return ''.join(out)
+
+    return re.sub(r'<w:r>(?:(?!</w:r>).)*?</w:r>', on_run, para_xml, flags=re.S)
 
 
 # ------------------------------------------------------------------- 主逻辑
@@ -424,6 +465,17 @@ def process(xml, stats, math_list=None, seq_field=True):
         # --- 3: 缺失图片 --------------------------------------------
         mi = re.search(r'⟦MISSINGIMG:([^⟧]*)⟧', txt)
         if mi:
+            # 段落里还有其他正文（行内插图缺图）：就地换红色占位 run。
+            # 整段替换会把同段落的正文一起吞掉。
+            if plain(strip_marks(x)).strip():
+                new_x = replace_token_runs(
+                    x, re.compile(r'⟦MISSINGIMG:([^⟧]*)⟧'),
+                    lambda m: red_run('［待插入图片：%s］' % m.group(1)))
+                if '⟦MISSINGIMG' not in new_x:
+                    out.append(new_x)
+                    stats['missing_img'] += 1
+                    i += 1
+                    continue
             p = ('<w:p><w:pPr><w:pStyle w:val="Caption"/></w:pPr>%s</w:p>'
                  % red_run('［待插入图片：%s］' % mi.group(1)))
             out.append(p)
@@ -475,6 +527,7 @@ def main():
     ap.add_argument('--math-json', help='latex 模式下 pre.py 落盘的公式源码')
     ap.add_argument('--number-style', choices=['plain', 'chapter'], default='plain')
     a = ap.parse_args()
+    _console_safe()
 
     math_list = []
     if a.math_json and os.path.exists(a.math_json):

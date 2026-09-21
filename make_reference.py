@@ -195,7 +195,17 @@ def patch_page(xml):
     return xml
 
 
+def _console_safe():
+    """Windows GBK 控制台打印 GBK 之外的字符会 UnicodeEncodeError，掩盖真实报错。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors='replace')
+        except Exception:
+            pass
+
+
 def main():
+    _console_safe()
     ap = argparse.ArgumentParser()
     ap.add_argument('out')
     ap.add_argument('--math-font', default='Cambria Math')
