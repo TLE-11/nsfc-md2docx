@@ -142,7 +142,8 @@ def main():
 
         print('[pipe] 4/4 校验')
         r = subprocess.run([py, os.path.join(HERE, 'verify.py'), a.src, out,
-                            '--math-mode', a.math_mode, '--number', a.number])
+                            '--math-mode', a.math_mode, '--number', a.number,
+                            '--prepared-md', pre_md])
         if r.returncode != 0:
             sys.exit('[pipe] 校验未通过，产物可能有问题，请看上面的失败项')
     finally:

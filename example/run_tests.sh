@@ -28,14 +28,13 @@ for doc in "${DOCS[@]}"; do
     for ns in plain chapter; do
       for nb in all tag none; do
         label="$name $mm/$ns/$nb"
-        r=$(python3 md2docx.py "$doc" -o "$TMP/out.docx" \
-              --math-mode "$mm" --number-style "$ns" --number "$nb" 2>&1)
-        if echo "$r" | grep -q "全部检查通过"; then
+        if r=$(python3 md2docx.py "$doc" -o "$TMP/out.docx" \
+              --math-mode "$mm" --number-style "$ns" --number "$nb" 2>&1); then
           printf "  PASS  %-34s %s\n" "$label" "$(echo "$r" | grep '^\[verify\] 块')"
           ok=$((ok + 1))
         else
           printf "  FAIL  %-34s\n" "$label"
-          echo "$r" | grep -E "失败|Traceback|Error" | sed 's/^/          /'
+          echo "$r"
           fail=$((fail + 1))
         fi
       done
@@ -45,4 +44,5 @@ done
 
 echo
 echo "通过 $ok / 失败 $fail"
-[[ $fail -eq 0 ]]
+[[ $fail -eq 0 ]] || exit 1
+python3 example/test_regressions.py

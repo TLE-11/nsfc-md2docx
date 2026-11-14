@@ -16,9 +16,11 @@ import argparse
 import json
 import os
 import re
-import shutil
 import sys
+import tempfile
 import zipfile
+
+from equation_layout import LayoutError, document_width, layout_equations
 
 
 def _console_safe():
@@ -80,7 +82,8 @@ def numbered_eq_p(math_para_xml, num, bmk, ids, seq_field, boxed):
     oMathPara + 文本 run 同段）。早期版本把公式从 oMathPara 里拆成内联
     m:oMath，编号是能同段了，但 Word 对内联公式一律套用行内紧凑规格：
     Σ 的上下限被挪到右下、分数缩成小分式——带编号公式整体降级。
-    oMathPara 自带居中（defJc=centerGroup），不需要前置 TAB。
+    随后的 layout_equations 根据实际版心设置居中/右对齐制表位和前置 TAB，
+    同时处理多行公式，避免渲染器忽略 oMathPara 的默认居中。
 
     latex 模式：本体是 MathSource 文本 run，没有显示规格一说，左起即可
     （反正随后要在 Word 里交给 MathType/AxMath 转换，居中性由转换结果决定）。
@@ -291,19 +294,25 @@ def split_inline_display(para_xml):
 
 def keep_para(para_xml):
     """段落是否需要保留：有实际文字，或带着还没处理的 ⟦...⟧ 标记。"""
-    return bool(plain(strip_marks(para_xml)).strip()) or '⟦' in para_xml
+    return (bool(plain(strip_marks(para_xml)).strip()) or '⟦' in para_xml
+            or any(tag in para_xml for tag in ('<w:drawing', '<w:pict', '<w:object',
+                                               '<w:footnoteReference', '<w:endnoteReference')))
 
 
 # pandoc/texmath 把 aligned 的对齐符 & 直接当普通字符写进 OMML，公式里会出现
 # 可见的 "&"。OMML 里对齐点的正确表达是 m:rPr/m:aln，这里做替换。
-AMP_RUN = re.compile(r'<m:r>(?:(?!</m:r>).)*?<m:t[^>]*>&amp;</m:t>\s*</m:r>', re.S)
+# texmath 给字面量 \\& 加 m:sty="p"，文本 \\text{} 还带 m:nor。
+# 只有 eqArr 内无 rPr 的独立 & 是对齐符，不能删除字面量。
+AMP_RUN = re.compile(r'<m:r>\s*<m:t[^>]*>&amp;</m:t>\s*</m:r>', re.S)
 ALN_RUN = '<m:r><m:rPr><m:aln/></m:rPr></m:r>'
 
 
 def fix_align_markers(xml, stats):
-    xml, n = AMP_RUN.subn(ALN_RUN, xml)
-    stats['align_fixed'] = n
-    return xml
+    def replace_array(match):
+        value, n = AMP_RUN.subn(ALN_RUN, match.group(0))
+        stats['align_fixed'] += n
+        return value
+    return re.sub(r'<m:eqArr>.*?</m:eqArr>', replace_array, xml, flags=re.S)
 
 
 SELFCLOSE_WS = re.compile(r'(<[^<>]*?)\s+/>')
@@ -398,7 +407,11 @@ def process(xml, stats, math_list=None, seq_field=True):
     xml = fill_eqrefs(xml, stats)
     ids = BmkIds(xml)
     body_m = re.search(r'(<w:body>)(.*)(</w:body>)', xml, re.S)
-    head, body, tail = xml[:body_m.start(2)], body_m.group(2), xml[body_m.end(2):]
+    if body_m:
+        head, body, tail = xml[:body_m.start(2)], body_m.group(2), xml[body_m.end(2):]
+    else:
+        # footnotes/endnotes 也可以包含公式、引用和图片。
+        head, body, tail = '', xml, ''
 
     # 切成 [段落 | 其它节点] 的有序块列表。latex 模式下顺手拆开「正文 + 行间公式」
     # 混排的段落，让它与 omml 模式（pandoc 会自动拆）表现一致。
@@ -454,7 +467,7 @@ def process(xml, stats, math_list=None, seq_field=True):
                 # 写法，pandoc 会把公式拆成独立段落，标记则落在后半段正文里。
                 # 剥掉标记后若仍有内容必须保留，否则整段正文被吞掉。
                 rest = strip_marks(x)
-                if plain(rest).strip():
+                if keep_para(rest):
                     out.append(rest)
                     stats['tail_kept'] += 1
                 i += 1
@@ -522,11 +535,10 @@ def process(xml, stats, math_list=None, seq_field=True):
         i += 1
 
     new_body = ''.join(out)
-    # 清掉可能残留的标记
+    # 保留未消费的标记，让校验拒绝不完整的转换，不能删掉证据后报告成功。
     left = re.findall(r'⟦[A-Z]+[^⟧]*⟧', new_body)
     if left:
         stats['leftover'] = left[:10]
-        new_body = re.sub(r'⟦[A-Z]+[^⟧]*⟧', '', new_body)
     return head + new_body + tail
 
 
@@ -543,22 +555,41 @@ def main():
     if a.math_json and os.path.exists(a.math_json):
         math_list = json.load(open(a.math_json, encoding='utf-8'))
 
-    shutil.copy(a.src, a.dst + '.tmp')
     stats = {'eqnum': 0, 'eqnum_orphan': 0, 'boxed': 0, 'missing_img': 0,
              'figph': 0, 'caption': 0, 'eq_plain': 0, 'align_fixed': 0,
              'math_filled': 0, 'math_orphan': 0, 'ref_fields': 0, 'tail_kept': 0, 'para_split': 0,
              'leftover': []}
 
-    zin = zipfile.ZipFile(a.dst + '.tmp')
-    with zipfile.ZipFile(a.dst, 'w', zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            data = zin.read(item.filename)
-            if item.filename == 'word/document.xml':
-                data = process(data.decode('utf-8'), stats, math_list,
-                               seq_field=(a.number_style == 'plain')).encode('utf-8')
-            zout.writestr(item, data)
-    zin.close()
-    os.remove(a.dst + '.tmp')
+    # 先完成所有 XML 变换和宽度检查。无法安全分行时不覆盖已有成品。
+    wrapped = 0
+    with zipfile.ZipFile(a.src) as zin:
+        changed = {}
+        styles = zin.read('word/styles.xml')
+        width = document_width(zin.read('word/document.xml'))
+        try:
+            for name in ('word/document.xml', 'word/footnotes.xml', 'word/endnotes.xml'):
+                if name not in zin.namelist():
+                    continue
+                xml = process(zin.read(name).decode('utf-8'), stats, math_list,
+                              seq_field=(a.number_style == 'plain'))
+                xml, count = layout_equations(xml, styles, width)
+                wrapped += count
+                changed[name] = xml.encode('utf-8')
+        except LayoutError as error:
+            sys.exit('[post] 公式排版失败: %s' % error)
+        fd, temporary = tempfile.mkstemp(prefix='.md2docx-', suffix='.docx',
+                                         dir=os.path.dirname(os.path.abspath(a.dst)))
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    zout.writestr(item, changed.get(item.filename, zin.read(item.filename)))
+            os.replace(temporary, a.dst)
+        finally:
+            if os.path.exists(temporary):
+                os.remove(temporary)
+
+    print('[post] 长公式自动分行 %d 个（按页面或表格宽度预留编号空间）' % wrapped)
 
     if math_list:
         print('[post] LaTeX 源码回填 %d 个（未匹配 %d）待 MathType/AxMath 批量转换'

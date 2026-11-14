@@ -7,9 +7,10 @@
 [![pandoc](https://img.shields.io/badge/pandoc-required-orange.svg)](https://pandoc.org)
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-60707f.svg)](#usage)
 
-**Markdown → submission-ready .docx for grant proposals and theses.**
+**Markdown → editable .docx for grant proposals and theses.**
 
-Turns a Markdown file full of LaTeX math into a Word document you can hand in as-is:
+Turns a Markdown file full of LaTeX math into an editable Word document.
+Check the layout in your target Word/WPS application before submission:
 
 - Equations become **native Word equation objects** — double-click to edit in Word or WPS.
   Not LaTeX code, not images, no plugins required
@@ -97,11 +98,14 @@ python3 md2docx.py example/sample.md -o /tmp/sample.docx
 ## Regression tests
 
 ```bash
-./example/run_tests.sh                 # sample × 12 option combinations
+./example/run_tests.sh                 # 24 sample/encoding combinations + scenario regressions
 ./example/run_tests.sh my-doc.md       # also runs your own document
 ```
 
-`verify.py` asserts the invariants and exits non-zero on any regression. Each section
+`run_tests.sh` checks process exit codes, then runs `example/test_regressions.py`.
+The latter independently checks equation characters, REF targets, images, tables,
+footnotes, and deliberately damaged outputs. Run it alone with
+`python3 example/test_regressions.py`; inputs are in `example/fixtures/`. Each section
 of `example/sample.md` ends with an HTML comment naming the trap it exists to
 trigger — keep those structures when modifying it.
 
@@ -142,7 +146,7 @@ md ──pre.py──> normalized md ──pandoc──> step1.docx ──post.p
 | `\tag{n}` | texmath drops it silently; the number vanishes completely. Extracted here, applied by post.py |
 | **Blank lines inside a `$$` block** | A blank line ends the paragraph in Markdown, so pandoc never sees a closing `$$` — **the entire equation is silently swallowed** with zero warnings. Blank lines are meaningless in LaTeX math, so they are squeezed out |
 | `\boxed{}` | OMML has no counterpart structure; the box is stripped and re-created as a paragraph border |
-| `---` horizontal rules | pandoc's `multiline_tables` treats them as table separators and **swallows the following text into table cells** (even `##` stops parsing). Rewritten to `***` |
+| `---` horizontal rules | pandoc's `multiline_tables` treats them as table separators and **swallows the following text into table cells** (even `##` stops parsing). The reader disables simple/multiline tables while preserving Setext headings |
 | Obsidian `![[image]]` embeds | Non-standard syntax that pandoc renders as plain text. Rewritten to `![](resolved-path)` with a recursive search through `--assets` directories; a loud placeholder is left if the file can't be found |
 | Inverted heading levels | `##` nested under `###` breaks the Word outline and auto-numbering. Normalized by the shape of the heading text (`x.y` / `x.y.z` / `（n）`) |
 | `【图占位N】` markers | Turned into loud placeholder paragraphs |
@@ -189,11 +193,12 @@ Checks:
 - every XML part inside the docx package is well-formed
 - **equation counts**: block / inline equation counts from the source must match
   what is actually in the docx
-- **character-by-character comparison of the CJK body text** (formulas and
-  placeholder text excluded) — catches swallowed paragraphs
+- **character-by-character comparison of visible CJK text** (parsed from the
+  Pandoc document tree, with footnotes expanded in reading order; code, math and
+  link destinations excluded) — catches swallowed paragraphs
+- image counts and REF targets, counts and cached values against prepared input
 - equation-number continuity; `\tag` count matches the number of numbered equations
-- no leftover internal markers, no leaked Markdown syntax, no visible `&` inside
-  equations
+- no leftover internal markers, no leaked Markdown syntax, no unprocessed alignment markers; literal `\&` characters are preserved
 - OOXML structure: table cells must contain a paragraph; adjacent tables must not
   be glued together
 
@@ -277,19 +282,18 @@ python3 make_reference.py reference.docx
 
 ## Verified results
 
-`example/sample.md` (205 lines) passes verify.py under **all 12 option
-combinations**: `omml`/`latex` × `plain`/`chapter` numbering × `all`/`tag`/`none`
+`example/sample.md` and its BOM/CRLF variant pass verify.py under **24 conversions**: `omml`/`latex` × `plain`/`chapter` numbering × `all`/`tag`/`none`
 numbering scope.
 
 - zero pandoc warnings during conversion
-- block equations 10/10, inline equations 18/18
-- right-aligned numbers 10/10, consecutive, none missing
-- all in-text cross-references remapped and turned into REF fields
-- CJK body text compared character by character: 825/825, zero content loss
+- block equations 11/11, inline equations 18/18
+- right-aligned numbers 11/11, consecutive, none missing
+- resolvable references remapped to REF fields; the sample also retains an intentional dangling-reference warning
+- CJK body text compared character by character: 972/972, zero content loss
 - all XML well-formed; no equation-numbering tables (hence no screen gridlines)
 
-Additionally validated on a real 1700+ line proposal containing 350+ equations
-(document not public).
+A historical version was also validated on a real 1700+ line proposal containing
+350+ equations (not public and not rerun in this round).
 
 During development verify.py caught **four** silent content losses — no error, the
 content was simply gone:
@@ -306,7 +310,39 @@ content was simply gone:
 The first two slipped through precisely because only the Chinese text was compared
 and equation counts weren't checked. **That is why verify.py exists.**
 
+## Automatic wrapping of long equations
+
+OMML display equations use the section/page margins, table cell width and equation
+font size to estimate available space, reserving room for the number. Long sums
+and relations wrap before top-level operators into an editable `m:eqArr` inside
+one native equation; numbering and cross-references remain intact. Short and
+inline equations are not reflowed. Fractions, radicals, scripts and grouped
+expressions stay intact. Oversized existing `aligned` rows can also wrap.
+LaTeX relay mode keeps its source representation.
+
+Width estimation is conservative, not a complete font-layout engine. An oversized
+indivisible expression fails with an actionable error and preserves any existing
+output file, rather than truncating content or reducing the font size. Rewrite
+such expressions with explicit `aligned` breaks or adjust the page layout.
+Check the target Word/WPS application when fonts are substituted.
+
+Optional PDF layout regression requires LibreOffice and `pdfplumber` (neither is
+an additional requirement for ordinary conversion):
+
+```bash
+python3 example/test_layout.py --output-dir /tmp/nsfc-layout
+```
+
+It renders six scenarios, checks real PDF character coordinates, equation term
+counts, wrapping and numbering, and keeps DOCX/PDF outputs for visual inspection.
+
 ## Known limitations
+
+- Programmatic checks and LibreOffice layout tests do not replace visual review
+  in the target Word/WPS application.
+- Unsupported inline OMML math (for example `\ce{H2O}`) now fails conversion,
+  rather than warning and reporting success. Rewrite it using supported syntax
+  or use `--math-mode latex` for a later conversion.
 
 - In omml mode `\boxed` is approximated with a paragraph border spanning the full
   paragraph width, not hugging the equation. In latex mode `\boxed` is preserved

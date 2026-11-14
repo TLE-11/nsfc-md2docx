@@ -37,18 +37,65 @@ MATH_INLINE = re.compile(r'(?<![\$\\])\$(?!\$)((?:[^\$\n]|\\\$)+?)(?<!\\)\$(?!\$
 # 的代码段（技术文档里很常见），就会被当成公式定界符，导致后面所有公式配对错位。
 CODE_RE = re.compile(
     r'(?P<fence>^(?P<f>```+|~~~+)[^\n]*\n.*?^(?P=f)[ \t]*$)'
+    r'|(?P<comment><!--.*?-->)'
     r'|(?P<inline>(?P<t>`+)(?!`).+?(?<!`)(?P=t)(?!`))',
     re.S | re.M)
 
 
 def split_code(text):
     """把文本切成 [(是否代码, 片段), ...]，代码片段不参与公式识别。"""
+    spans = [(m.start(), m.end()) for m in CODE_RE.finditer(text)]
+    indented = []
+    # 缩进代码按容器缩进判断；列表正文和多行数学中的缩进不是代码。
+    offset, base, in_math, blank, code_start = 0, 0, False, True, None
+    span_index = 0
+    for line in text.splitlines(keepends=True):
+        end = offset + len(line)
+        while span_index < len(spans) and spans[span_index][1] <= offset:
+            span_index += 1
+        protected = (span_index < len(spans) and spans[span_index][0] <= offset
+                     and spans[span_index][1] > offset)
+        indent = len(line.expandtabs(4)) - len(line.expandtabs(4).lstrip(' '))
+        empty = not line.strip()
+        if code_start is not None:
+            if empty or indent >= base + 4:
+                offset = end
+                continue
+            indented.append((code_start, offset))
+            code_start = None
+        if not protected and not in_math and not empty:
+            if indent < base:
+                base = 0
+            marker = re.match(r'^\s*(?:[-+*]|\d+[.)])\s+', line)
+            if marker:
+                base = len(marker.group(0).expandtabs(4))
+            elif blank and indent >= base + 4:
+                code_start = offset
+                offset = end
+                continue
+        # 同一行可能同时含行内代码和真正的数学，不能整行跳过。
+        cursor, delimiters, j = offset, 0, span_index
+        while j < len(spans) and spans[j][0] < end:
+            start, stop = spans[j]
+            delimiters += len(re.findall(r'(?<!\\)\$\$', text[cursor:max(cursor, start)]))
+            cursor = min(end, max(cursor, stop))
+            j += 1
+        delimiters += len(re.findall(r'(?<!\\)\$\$', text[cursor:end]))
+        if delimiters % 2:
+            in_math = not in_math
+        blank = empty
+        offset = end
+    if code_start is not None:
+        indented.append((code_start, len(text)))
+    spans = sorted(spans + indented)
     parts, pos = [], 0
-    for m in CODE_RE.finditer(text):
-        if m.start() > pos:
-            parts.append((False, text[pos:m.start()]))
-        parts.append((True, m.group(0)))
-        pos = m.end()
+    for start, end in spans:
+        if end <= pos:
+            continue
+        if start > pos:
+            parts.append((False, text[pos:start]))
+        parts.append((True, text[max(start, pos):end]))
+        pos = end
     if pos < len(text):
         parts.append((False, text[pos:]))
     return parts
@@ -65,43 +112,66 @@ def map_noncode(text, fn):
                    for is_code, chunk in split_code(text))
 
 
-# 围栏代码块开关：与 CODE_RE 口径一致（行首 ``` 或 ~~~，闭合围栏不短于开启）。
-FENCE_RE = re.compile(r'^(`{3,}|~{3,})')
-
-
 def iter_noncode_lines(text):
     """逐行产出 (是否代码行, 行文本)。围栏行本身算代码行。
 
     行级扫描（标题归一化、分隔线消歧、编号分配）都用它跳过代码块：
     代码里的 `# 5 注释`、`---`、公式标记都只是字面文字。
     """
-    fence = None
+    # 对齐 split_code 的围栏、缩进代码和 HTML 注释保护范围。
+    protected = []
+    offset = 0
+    for is_code, chunk in split_code(text):
+        if is_code:
+            protected.append((offset, offset + len(chunk)))
+        offset += len(chunk)
+    offset, index = 0, 0
     for ln in text.split('\n'):
-        fm = FENCE_RE.match(ln)
-        if fm:
-            mark = fm.group(1)
-            if fence is None:
-                fence = mark
-            elif mark[0] == fence[0] and len(mark) >= len(fence):
-                fence = None
-            yield True, ln
-        else:
-            yield fence is not None, ln
+        while index < len(protected) and protected[index][1] <= offset:
+            index += 1
+        yield (index < len(protected) and protected[index][0] <= offset
+               and protected[index][1] >= offset + len(ln)), ln
+        offset += len(ln) + 1
 
 
 def map_math(text, fn_block, fn_inline):
     """分别对块公式与行内公式套用函数，不触碰正文，也不触碰代码区域。"""
-    def on_plain(seg):
+    def on_plain(seg, offset):
         out, pos = [], 0
         for m in MATH_BLOCK.finditer(seg):
             out.append(MATH_INLINE.sub(lambda i: fn_inline(i.group(1)), seg[pos:m.start()]))
-            out.append(fn_block(m.group(1)))
+            body = m.group(1)
+            start = offset + m.start()
+            prefix = text[text.rfind('\n', 0, start) + 1:start]
+            quote = re.match(r'^(?:[ \t]*>[ \t]?)+', prefix)
+            if quote:
+                depth = quote.group(0).count('>')
+                lines = body.split('\n')
+                for i in range(1, len(lines)):
+                    for _ in range(depth):
+                        lines[i] = re.sub(r'^[ \t]*>[ \t]?', '', lines[i], count=1)
+                body = '\n'.join(lines)
+            out.append(fn_block(body))
             pos = m.end()
         out.append(MATH_INLINE.sub(lambda i: fn_inline(i.group(1)), seg[pos:]))
         return ''.join(out)
 
-    return ''.join(chunk if is_code else on_plain(chunk)
-                   for is_code, chunk in split_code(text))
+    out, offset = [], 0
+    for is_code, chunk in split_code(text):
+        out.append(chunk if is_code else on_plain(chunk, offset))
+        offset += len(chunk)
+    return ''.join(out)
+
+
+def compact_math(body):
+    """保持数学语义地压成一行，避免破坏引用、列表和管道表格的容器语法。"""
+    # 先去掉 TeX 行注释；不能让换行消失后 % 吞掉后续整条公式。
+    body = strip_math_comments(body)
+    return ' '.join(line.strip() for line in body.splitlines()).strip()
+
+
+def strip_math_comments(body):
+    return re.sub(r'(?<!\\)((?:\\\\)*)%[^\n]*', r'\1', body)
 
 
 # ------------------------------------------------------- 1. 老式字体命令转换
@@ -184,7 +254,7 @@ def strip_boxed(m, stats):
 # ------------------------------------------------------------------ 主处理流程
 
 def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
-            number='all', number_style='plain'):
+            number='all', number_style='plain', source_dir=None):
     """math_mode:
          omml  —— 公式交给 pandoc 编译成 Word 原生公式对象（默认）
          latex —— 公式保留 LaTeX 源码，作为带样式的文本落到 docx 里，
@@ -196,6 +266,7 @@ def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
 
     # --- 2/3: 块公式里摘 \tag 与 \boxed ---------------------------------
     def on_block(body):
+        body = strip_math_comments(body)
         tags = TAG_RE.findall(body)
         body = TAG_RE.sub('', body)
         # 块公式内部的空行会在 markdown 层断段，导致 pandoc 拿不到闭合的 $$，
@@ -231,7 +302,7 @@ def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
             stats['math_latex'] += 1
             return '⟦MATHD:%d⟧' % idx + marks
         # 标记紧跟在 $$ 之后不空行 -> pandoc 会与公式合成同一段落
-        return '$$\n' + body + '\n$$' + marks
+        return '$$' + compact_math(body) + '$$' + marks
 
     def on_inline(body):
         if not latex_mode:
@@ -259,6 +330,13 @@ def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
                 img_index.setdefault(f, os.path.join(root, f))
 
     def resolve(name):
+        # 显式路径优先，避免 basename 回退把同名但不同目录的图片换错。
+        for directory in ([source_dir] if source_dir else []) + list(assets_dirs):
+            candidate = os.path.abspath(os.path.join(directory, name))
+            if os.path.isfile(candidate):
+                return candidate
+        if '/' in name or '\\' in name:
+            return None
         return img_index.get(name)
 
     def on_wikiimg(m):
@@ -287,12 +365,7 @@ def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
         if in_code:
             fixed.append(ln)
             continue
-        # 独立的 --- / ___ 分隔线：pandoc 的 multiline_tables 会把它当表格头
-        # 分隔符，从而把后面整段正文吞成表格里的纯文本。统一改写为 ***。
-        if re.match(r'^\s*(-{3,}|_{3,})\s*$', ln):
-            stats['hr_normalized'] += 1
-            fixed.append('***')
-            continue
+        # simple_tables/multiline_tables 已在入口禁用，保留 --- 的标题语义。
         h = re.match(r'^(#{1,6})\s+(.*)$', ln)
         if not h:
             fixed.append(ln)
@@ -325,7 +398,8 @@ def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
 EQ_MARK = re.compile(r'⟦EQ:([^⟧]*)⟧')
 H1_NUM = re.compile(r'^#\s+(\d+)')
 # 正文里的公式引用：式（6）/ 式(6) / 式 (6)，也支持"由式（6）—（8）"这类区间的端点
-REF_RE = re.compile(r'式\s*[（(]\s*(\d+)\s*[)）]')
+REF_NUMBER = r'[（(]\s*(\d+)\s*[)）]'
+REF_RE = re.compile(r'式\s*' + REF_NUMBER + r'(?:\s*[—–－\-至~～]\s*' + REF_NUMBER + r')*')
 
 
 def assign_numbers(text, stats, number='all', style='plain'):
@@ -369,7 +443,7 @@ def assign_numbers(text, stats, number='all', style='plain'):
                 if origtag in tag2num:
                     stats['dup_tags'].append(origtag)
                 tag2num[origtag] = (num, bmk)
-            return '⟦EQNO:%s|%s|%d⟧' % (num, bmk, seq_global)
+            return '⟦EQNO:%s\\|%s\\|%d⟧' % (num, bmk, seq_global)
 
         out_lines.append(EQ_MARK.sub(on_mark, ln))
 
@@ -379,13 +453,15 @@ def assign_numbers(text, stats, number='all', style='plain'):
     # 正文交叉引用回改。只改能对上原 \tag 的，改不上的原样留下并报告，
     # 避免把作者本来就悬空的引用（比如某节公式在源文件里整节缺失）改错。
     def on_ref(m):
-        old = m.group(1)
-        if old in tag2num:
-            num, bmk = tag2num[old]
-            stats['ref_remapped'] += 1
-            return '式⟦EQREF:%s|%s⟧' % (bmk, num)
-        stats['ref_unresolved'].append(m.group(0))
-        return m.group(0)
+        def replace_number(part):
+            old = part.group(1)
+            if old in tag2num:
+                num, bmk = tag2num[old]
+                stats['ref_remapped'] += 1
+                return '⟦EQREF:%s\\|%s⟧' % (bmk, num)
+            stats['ref_unresolved'].append('式' + part.group(0))
+            return part.group(0)
+        return re.sub(REF_NUMBER, replace_number, m.group(0))
 
     # 代码区里的"式（n）"是字面文字，不能改成 REF 域
     text = map_noncode(text, lambda s: REF_RE.sub(on_ref, s))
@@ -419,7 +495,7 @@ def main():
     # 匹配不上行首正则——chapter 模式下第一章公式编号静默回退成全局序号
     text = open(a.src, encoding='utf-8-sig').read()
     out = process(text, a.assets, stats, a.math_mode, math_sink,
-                  a.number, a.number_style)
+                  a.number, a.number_style, source_dir=os.path.dirname(os.path.abspath(a.src)))
     open(a.dst, 'w', encoding='utf-8').write(out)
 
     if a.math_mode == 'latex':
@@ -444,7 +520,6 @@ def main():
         print('[pre] 注意：--assets 目录不存在（图片将全部按缺失处理）: %s'
               % '、'.join(stats['assets_bad']))
     print('[pre] 图占位 %d 处' % stats['placeholders'])
-    print('[pre] 分隔线消歧 %d 处（--- -> ***，防被当表格吞正文）' % stats['hr_normalized'])
     print('[pre] 公式内空行压缩 %d 处（否则该公式会被 pandoc 整块吞掉）' % stats['blank_in_math'])
     print('[pre] 公式清点：块公式 %d 个，行内公式 %d 个，合计 %d'
           % (stats['math_blocks'], stats['math_inline'],
