@@ -102,8 +102,9 @@ python3 md2docx.py example/sample.md -o /tmp/sample.docx
 ./example/run_tests.sh my-doc.md       # also runs your own document
 ```
 
-`run_tests.sh` checks process exit codes, then runs `example/test_regressions.py`.
-The latter independently checks equation characters, REF targets, images, tables,
+`run_tests.sh` checks process exit codes, then runs conversion regressions and
+`example/test_vba_contract.py` static VBA checks.
+The conversion regressions independently check equation characters, REF targets, images, tables,
 footnotes, and deliberately damaged outputs. Run it alone with
 `python3 example/test_regressions.py`; inputs are in `example/fixtures/`. Each section
 of `example/sample.md` ends with an HTML comment naming the trap it exists to
@@ -145,7 +146,7 @@ md ──pre.py──> normalized md ──pandoc──> step1.docx ──post.p
 | `\rm` and other legacy font commands | texmath **does not support** `\rm`/`\bf`/`\it` and silently degrades the **whole equation into literal LaTeX text** — the #1 cause of "my equations turned into code". Rewritten to `\mathrm{}` etc. |
 | `\tag{n}` | texmath drops it silently; the number vanishes completely. Extracted here, applied by post.py |
 | **Blank lines inside a `$$` block** | A blank line ends the paragraph in Markdown, so pandoc never sees a closing `$$` — **the entire equation is silently swallowed** with zero warnings. Blank lines are meaningless in LaTeX math, so they are squeezed out |
-| `\boxed{}` | OMML has no counterpart structure; the box is stripped and re-created as a paragraph border |
+| `\boxed{}` | Preserved as native OMML `m:borderBox`, including grouping and scripts |
 | `---` horizontal rules | pandoc's `multiline_tables` treats them as table separators and **swallows the following text into table cells** (even `##` stops parsing). The reader disables simple/multiline tables while preserving Setext headings |
 | Obsidian `![[image]]` embeds | Non-standard syntax that pandoc renders as plain text. Rewritten to `![](resolved-path)` with a recursive search through `--assets` directories; a loud placeholder is left if the file can't be found |
 | Inverted heading levels | `##` nested under `###` breaks the Word outline and auto-numbering. Normalized by the shape of the heading text (`x.y` / `x.y.z` / `（n）`) |
@@ -231,15 +232,14 @@ Skips texmath entirely: equations land in the docx as LaTeX source (a blue
 monospace `MathSource` character style, so unconverted ones are visible at a
 glance), and MathType / AxMath parse them themselves.
 
-**Advantage**: bypasses texmath's weak spots. `\boxed` and complex `aligned` —
-structures that omml mode degrades — pass through untouched to the stronger
-parser. `\boxed` is no longer stripped in this mode.
+**Advantage**: preserves source for commands unsupported by texmath. `\boxed`
+is preserved in both modes; OMML uses a native mathematical box.
 
-The companion VBA macros are in `mathtype_axmath.bas`; the walkthrough is in
-[WINDOWS.md](WINDOWS.md) (in Chinese). Key point: **run `ProbeEquationMacros`
-first**, don't fire the conversion macros blindly. Neither MathType nor AxMath
-publishes a stable VBA interface; macro names are determined by probing, and if
-probing finds nothing, the documented GUI path is used instead.
+The companion VBA macros are in `mathtype_axmath.bas`; see [WINDOWS.md](WINDOWS.md).
+`ProbeEquationMacros` reports installed add-ins and configured macro names without
+executing them. Conversion requires an explicitly configured, locally verified
+macro name and confirmation. Without one, use the plugin GUI. Counting, highlighting
+and conversion include footnotes and endnotes; failed sources remain available for retry.
 
 ### Platform reality
 
@@ -322,7 +322,9 @@ LaTeX relay mode keeps its source representation.
 
 Width estimation is conservative, not a complete font-layout engine. An oversized
 indivisible expression fails with an actionable error and preserves any existing
-output file, rather than truncating content or reducing the font size. Rewrite
+output file, rather than truncating content or reducing the font size. Equations
+whose estimated height exceeds one page are rejected too; split them into separate
+equations or adjust the page height. Rewrite
 such expressions with explicit `aligned` breaks or adjust the page layout.
 Check the target Word/WPS application when fonts are substituted.
 
@@ -333,8 +335,12 @@ an additional requirement for ordinary conversion):
 python3 example/test_layout.py --output-dir /tmp/nsfc-layout
 ```
 
-It renders six scenarios, checks real PDF character coordinates, equation term
-counts, wrapping and numbering, and keeps DOCX/PDF outputs for visual inspection.
+It renders ten scenarios, checks horizontal and vertical PDF bounds, equation
+terms, pagination, text following boxed formulas, links and numbering, and verifies rejection of an
+oversized 200-term equation. DOCX/PDF outputs are retained for visual inspection.
+
+DOCX output is replaced only after validation succeeds. PDF previews are exported
+in isolation; failed exports preserve an existing PDF and report that it was not updated.
 
 ## Known limitations
 
@@ -344,9 +350,11 @@ counts, wrapping and numbering, and keeps DOCX/PDF outputs for visual inspection
   rather than warning and reporting success. Rewrite it using supported syntax
   or use `--math-mode latex` for a later conversion.
 
-- In omml mode `\boxed` is approximated with a paragraph border spanning the full
-  paragraph width, not hugging the equation. In latex mode `\boxed` is preserved
-  and left to MathType / AxMath.
+- Native `\boxed` output is covered by regression tests with Pandoc 3.11.
+  Unsupported formulas fail validation instead of silently losing structure.
+  The LibreOffice renderer used for these checks omits native `m:borderBox`
+  borders in PDF previews. Box structure and script grouping are verified in DOCX
+  XML; their appearance still needs checking in the target Word/WPS application.
 - When renumbering, references that match no original `\tag` are **left as-is and
   reported** — no guessing. The source may genuinely contain dangling references
   (e.g. a whole section missing from the md); those need manual attention.
@@ -363,13 +371,14 @@ counts, wrapping and numbering, and keeps DOCX/PDF outputs for visual inspection
   blank; the PDF text layer is intact — purely a rasterization issue). Everything
   structural is verified; the look of fonts, sizes and spacing needs a human to
   open the file.
-- **Not a single line of the VBA in `mathtype_axmath.bas` has been executed**
-  (macros don't run on macOS). The four plugin-free macros (`UpdateAllFields` /
-  `SelectLatexEquations` / `CountLatexEquations` / `CleanupAfterConvert`) use only
-  the standard Word object model; the two conversion macros probe for plugin
-  interfaces at runtime and degrade explicitly to the GUI path when probing fails.
-  If you're on Windows, please run `ProbeEquationMacros` and report the result in
-  an issue.
+- **Word VBA integration has not been executed in this macOS environment.**
+  Portable checks in `example/test_vba_contract.py` check the no-execution probe
+  and shared story traversal contracts, but cannot validate Word's object model.
+  On Windows with Word and VBA project access already enabled, run
+  `powershell -File example/test_word_macros.ps1`. It uses a temporary document and
+  controlled callbacks to check confirmation, footnotes/endnotes, no-op and failed
+  conversions, and cleanup. It does not change Office security settings or validate
+  a real MathType/AxMath version.
 
 ## Other traps we hit
 

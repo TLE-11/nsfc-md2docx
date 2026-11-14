@@ -86,8 +86,30 @@ def math_width(node, em):
         cols = max((len(row) for row in rows), default=0)
         return sum(max((math_width(row[i], em) for row in rows if i < len(row)),
                        default=0) for i in range(cols)) + max(0, cols - 1) * em
-    extra = {'m:d': 2, 'm:rad': 1, 'm:nary': 2, 'm:func': .5}.get(tag, 0) * em
+    extra = {'m:d': 2, 'm:rad': 1, 'm:nary': 2, 'm:func': .5,
+             'm:borderBox': .6}.get(tag, 0) * em
     return sum(math_width(n, em) for n in children(node)) + extra
+
+
+def math_height(node, em):
+    """估计不可跨页的数学对象总高度；与横向估计一样留有字体替换余量。"""
+    tag = node.tagName
+    if tag.endswith('Pr'):
+        return 0
+    if tag == 'm:r':
+        size = child(child(node, 'w:rPr'), 'w:sz')
+        return number(size, 'w:val', em * 2) / 2 * 1.3
+    if tag in ('m:eqArr', 'm:m'):
+        rows = children(node, 'm:e' if tag == 'm:eqArr' else 'm:mr')
+        return sum(math_height(row, em) for row in rows) + max(0, len(rows) - 1) * .4 * em
+    if tag == 'm:f':
+        return sum(math_height(n, em) for n in children(node)
+                   if n.tagName in ('m:num', 'm:den')) + .5 * em
+    base = max((math_height(n, em) for n in children(node)), default=0)
+    extra = {'m:sSub': .5, 'm:sSup': .5, 'm:sSubSup': 1,
+             'm:rad': .4, 'm:nary': 1.5, 'm:borderBox': .4,
+             'm:limLow': .7, 'm:limUpp': .7}.get(tag, 0)
+    return base + extra * em
 
 
 def split_rows(nodes, limit, em):
@@ -174,18 +196,29 @@ def document_width(xml):
     return min((section_width(s) for s in sections), default=415.6)
 
 
-def paragraph_widths(doc, fallback):
+def section_height(section):
+    page, margin = child(section, 'w:pgSz'), child(section, 'w:pgMar')
+    return (number(page, 'w:h', 16838) - number(margin, 'w:top', 1440)
+            - number(margin, 'w:bottom', 1440)) / 20
+
+
+def document_height(xml):
+    sections = minidom.parseString(xml).getElementsByTagName('w:sectPr')
+    return min((section_height(s) for s in sections), default=697.9)
+
+
+def paragraph_dimensions(doc, fallback, measure):
     widths, pending = {}, []
     for p in doc.getElementsByTagName('w:p'):
         pending.append(p)
         section = child(child(p, 'w:pPr'), 'w:sectPr')
         if section is not None:
-            width = section_width(section)
+            width = measure(section)
             widths.update((n, width) for n in pending)
             pending = []
     body = child(doc.documentElement, 'w:body')
     section = child(body, 'w:sectPr')
-    widths.update((p, section_width(section) if section else fallback) for p in pending)
+    widths.update((p, measure(section) if section else fallback) for p in pending)
     return widths
 
 
@@ -240,7 +273,7 @@ def container_width(node, page):
     return page
 
 
-def layout_equations(xml, styles_xml, page_width=415.6):
+def layout_equations(xml, styles_xml, page_width=415.6, page_height=697.9):
     doc, styles = minidom.parseString(xml), minidom.parseString(styles_xml)
     style_map = {s.getAttribute('w:styleId'): s for s in styles.getElementsByTagName('w:style')}
 
@@ -256,7 +289,8 @@ def layout_equations(xml, styles_xml, page_width=415.6):
             style_id = based.getAttribute('w:val') if based else ''
         return None
 
-    widths = paragraph_widths(doc, page_width)
+    widths = paragraph_dimensions(doc, page_width, section_width)
+    heights = paragraph_dimensions(doc, page_height, section_height)
     wrapped = 0
     for p in doc.getElementsByTagName('w:p'):
         ppr = child(p, 'w:pPr')
@@ -279,6 +313,10 @@ def layout_equations(xml, styles_xml, page_width=415.6):
         for display in displays:
             for math in children(display, 'm:oMath'):
                 wrapped += int(wrap_math(math, budget, em))
+        spacing = child(ppr, 'w:spacing') or inherited(style_id, 'w:pPr', 'w:spacing')
+        vertical_space = (number(spacing, 'w:before') + number(spacing, 'w:after')) / 20
+        if sum(math_height(d, em) for d in displays) + vertical_space > heights[p] * .85:
+            raise LayoutError('公式高度超过单页可用高度；请拆成多个独立公式或调整页面高度')
         if numbered:
             for old in children(ppr, 'w:tabs'):
                 ppr.removeChild(old)

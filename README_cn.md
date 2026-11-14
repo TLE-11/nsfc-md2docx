@@ -73,7 +73,7 @@ python3 md2docx.py example/sample.md -o /tmp/sample.docx
 ./example/run_tests.sh 我的本子.md        # 顺带测自己的文档
 ```
 
-按转换命令退出码判断成功，随后运行 `example/test_regressions.py`。
+按转换命令退出码判断成功，随后运行 `example/test_regressions.py` 和 VBA 静态契约检查 `example/test_vba_contract.py`。
 场景测试独立断言公式字符、REF 目标、图片数量、表格结构和脚注内容，并通过故意破坏产物验证校验器会拒绝错误。
 可单独运行 `python3 example/test_regressions.py`；最小复现输入位于 `example/fixtures/`。`example/sample.md` 每个小节末尾用
 HTML 注释标了它专门触发哪个陷阱，改动时请保留那些结构。
@@ -114,7 +114,7 @@ md ──pre.py──> 规整后的 md ──pandoc──> step1.docx ──post
 | `\rm` 等老式字体命令 | pandoc 的 texmath **不支持** `\rm`/`\bf`/`\it`，遇到就把**整块公式退化成 LaTeX 原文**。这是"公式变成代码"的首要原因。自动转成 `\mathrm{}` 等 |
 | `\tag{n}` | texmath 静默吞掉，编号完全丢失。这里摘出来交给 post.py |
 | **公式块内部的空行** | markdown 里空行断段，pandoc 拿不到闭合的 `$$`，**整块公式被静默吞掉**且不报警告。空行在 LaTeX 数学里无意义，直接压掉 |
-| `\boxed{}` | OMML 无对应结构，摘掉方框、改由段落边框实现 |
+| `\boxed{}` | 保留原生 OMML `m:borderBox`，包括数学分组和上下标 |
 | `---` 分隔线 | pandoc 的 `multiline_tables` 会把它当表格头分隔符，**把后面整段正文吞成表格里的纯文本**（`##` 都不解析）。入口禁用这两种表格扩展，保留 `---` 的 Setext 标题语义 |
 | Obsidian `![[图片]]` | 非标准语法，pandoc 当纯文本。改写为 `![](真实路径)`，并在附件目录里递归搜文件；找不到就留醒目占位 |
 | 标题层级倒挂 | 原文有 `###` 下面挂 `##` 的情况，转 Word 后大纲和自动编号会乱。按标题文字形态（`x.y` / `x.y.z` / `（n）`）归一化 |
@@ -183,12 +183,11 @@ MathType equations、范围选 Whole document。官方文档写明支持整篇�
 跳过 texmath，公式以 LaTeX 源码形式落进 docx（蓝色等宽的 `MathSource` 字符样式，
 肉眼一眼能认出哪些还没转），再让 MathType / AxMath 自己解析。
 
-**优势**：绕开 texmath 的短板。`\boxed`、复杂 `aligned` 这些在 omml 模式下会降级处理的
-结构，这里原样交给更强的解析器。`--math-mode latex` 下 `\boxed` 也不再被摘除。
+**优势**：为 texmath 不支持的命令保留源码。两种模式均保留 `\boxed`；OMML 模式输出原生数学方框。
 
 配套 VBA 宏在 `mathtype_axmath.bas`，操作步骤见 **[WINDOWS.md](WINDOWS.md)**。
-关键一点：**先运行 `ProbeEquationMacros` 探测**，别直接跑转换宏。
-MathType / AxMath 都没有公开稳定的 VBA 接口文档，宏名靠探测确定，探测不到就走 GUI。
+`ProbeEquationMacros` 只报告加载项和宏名配置，不执行插件宏，也不宣称接口可用。
+转换前须配置本机已确认的宏名并确认执行；未配置时使用插件 GUI。计数、高亮和转换包含脚注、尾注，失败源码保留供重试。
 
 ### 平台现实
 
@@ -258,6 +257,7 @@ python3 make_reference.py reference.docx
 
 宽度是保守估计，不是完整字体排版引擎。无法安全拆分的超宽项会报错退出，
 并保留已有输出文件；这时需要手工改写 `aligned` 或调整版面，不会静默截断或缩小字号。
+预计高度超过单页的公式也会拒绝；需拆成多个独立公式或调整页面高度。
 字体替换仍可能影响实际宽度，正式交稿前请在目标 Word/WPS 中检查。
 
 结构回归已包含长公式、窄页面、表格、分数及失败时保留输出的场景。
@@ -267,16 +267,19 @@ python3 make_reference.py reference.docx
 python3 example/test_layout.py --output-dir /tmp/nsfc-layout
 ```
 
-该测试转换六类文档到 PDF，用实际字符坐标检查版心、单元格和编号位置，
-并核对公式项数和换行；输出目录保留 DOCX、PDF 和检查结果。
+该测试渲染十类文档，检查横纵版心、单元格、分页、方框公式后的文字、链接和编号位置，
+核对公式项数，并验证 200 项超高公式被拒绝；输出目录保留 DOCX、PDF 和检查结果。
+
+DOCX 仅在全部校验通过后替换目标文件。PDF 在独立目录导出；失败时保留旧 PDF，并明确提示其未更新。
 
 ## 已知限制
 
 - 程序校验及 LibreOffice 排版回归不代替目标 Word/WPS 的视觉验收。
 - OMML 模式下不支持的行内公式（如 `\ce{H2O}`）会失败退出；不会再仅告警后宣称通过。可改写为 Pandoc 支持的语法，或使用 `--math-mode latex` 中转。
 
-- omml 模式下 `\boxed` 用段落边框近似，边框是整段宽度，不是紧贴公式。
-  latex 模式下 `\boxed` 原样保留，交给 MathType / AxMath 处理。
+- 原生 `\boxed` 已在 Pandoc 3.11 上回归验证。不支持的公式会校验失败，不再通过摘除结构兜底。
+  当前测试使用的 LibreOffice 会在 PDF 预览中遗漏原生 `m:borderBox` 边框。
+  DOCX XML 中的方框结构和上下标分组已验证；外观仍需在目标 Word/WPS 中确认。
 - 重编号时，正文里对不上任何原有 `\tag` 的引用会**原样保留并报警**，不做猜测。
   源文档本身可能有悬空引用（比如某节公式在 md 里整节缺失），这种必须人工处理。
 - `--number-style chapter` 用静态编号文本，在 Word 里按 F9 不会自动重编号
@@ -289,11 +292,11 @@ python3 example/test_layout.py --output-dir /tmp/nsfc-layout
 - **OMML 在 WPS / Word 里的实际渲染。** 开发机是 macOS，LibreOffice 在上面找不到
   能绘制 CJK 的字体，栅格化时中文全空（PDF 文字层里汉字都在，是纯栅格化问题）。
   结构层面全部校验通过，但字体、字号、行距的观感需要人工打开确认。
-- **`mathtype_axmath.bas` 里的 VBA 一行都没跑过**（macOS 跑不了 Word 宏）。
-  不依赖插件的四个宏（`UpdateAllFields` / `SelectLatexEquations` /
-  `CountLatexEquations` / `CleanupAfterConvert`）用的都是标准 Word 对象模型；
-  依赖插件的两个转换宏靠运行时探测确定接口，探测失败会明确降级到 GUI 流程。
-  欢迎在 Windows 上跑 `ProbeEquationMacros` 并把结果反馈到 issue。
+- **本机尚未执行 Word VBA 实机回归。** `example/test_vba_contract.py` 检查探测不执行宏、
+  所有源码操作共享 story 遍历等静态契约，不代替 Word 对象模型验证。
+  在已允许访问 VBA 工程对象模型的 Windows + Word 上，可运行
+  `powershell -File example/test_word_macros.ps1`。它在临时文档里用受控宏替身验证确认流程、
+  正文/脚注/尾注、无效转换、失败重试和清理，不修改 Office 安全设置，也不代表真实插件版本兼容。
 
 ## 其他踩过的坑
 

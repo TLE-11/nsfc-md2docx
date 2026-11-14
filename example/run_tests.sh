@@ -45,4 +45,5 @@ done
 echo
 echo "通过 $ok / 失败 $fail"
 [[ $fail -eq 0 ]] || exit 1
-python3 example/test_regressions.py
+python3 example/test_regressions.py || exit 1
+python3 example/test_vba_contract.py

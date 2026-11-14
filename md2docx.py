@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -66,6 +67,23 @@ def run(cmd, label):
     r = subprocess.run(cmd)
     if r.returncode != 0:
         sys.exit('[pipe] %s 失败（退出码 %d）' % (label, r.returncode))
+
+
+def export_pdf(soffice, docx):
+    """只发布本次成功导出的 PDF，失败时保留旧预览但不把它报告为新结果。"""
+    docx = Path(docx).resolve()
+    with tempfile.TemporaryDirectory(prefix='.md2docx-pdf-', dir=docx.parent) as temp:
+        folder = Path(temp)
+        result = subprocess.run([
+            soffice, '-env:UserInstallation=' + (folder / 'profile').as_uri(),
+            '--headless', '--convert-to', 'pdf', str(docx), '--outdir', str(folder)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        generated = folder / (docx.stem + '.pdf')
+        if result.returncode != 0 or not generated.is_file() or generated.stat().st_size == 0:
+            return None
+        target = docx.with_suffix('.pdf')
+        os.replace(generated, target)
+        return str(target)
 
 
 def _console_safe():
@@ -114,7 +132,11 @@ def main():
                  '--font-profile', a.fonts], 'make_reference')
 
     tmp = tempfile.mkdtemp(prefix='md2docx_')
+    # 与目标同一文件系统；所有验证通过后才替换成品。
+    candidate = None
     try:
+        fd, candidate = tempfile.mkstemp(prefix='.md2docx-', suffix='.docx', dir=out_dir)
+        os.close(fd)
         pre_md = os.path.join(tmp, 'pre.md')
         math_json = os.path.join(tmp, 'math.json')
         step1 = os.path.join(tmp, 'step1.docx')
@@ -137,16 +159,19 @@ def main():
             sys.exit('[pipe] pandoc 没有产出文件')
 
         print('[pipe] 3/4 后处理')
-        run([py, os.path.join(HERE, 'post.py'), step1, out,
+        run([py, os.path.join(HERE, 'post.py'), step1, candidate,
              '--math-json', math_json, '--number-style', a.number_style], 'post.py')
 
         print('[pipe] 4/4 校验')
-        r = subprocess.run([py, os.path.join(HERE, 'verify.py'), a.src, out,
+        r = subprocess.run([py, os.path.join(HERE, 'verify.py'), a.src, candidate,
                             '--math-mode', a.math_mode, '--number', a.number,
                             '--prepared-md', pre_md])
         if r.returncode != 0:
             sys.exit('[pipe] 校验未通过，产物可能有问题，请看上面的失败项')
+        os.replace(candidate, out)
     finally:
+        if candidate and os.path.exists(candidate):
+            os.remove(candidate)
         if a.keep_temp:
             print('[pipe] 中间文件保留在 %s' % tmp)
         else:
@@ -159,16 +184,11 @@ def main():
         if not so:
             print('[pipe] 未找到 LibreOffice，跳过 PDF 预览')
         else:
-            d = os.path.dirname(os.path.abspath(out)) or '.'
-            subprocess.run([so, '--headless', '--convert-to', 'pdf', out,
-                            '--outdir', d], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
-            # LibreOffice 转换失败时退出码也可能是 0，只能看产物说话
-            pdf = os.path.splitext(out)[0] + '.pdf'
-            if os.path.exists(pdf):
+            pdf = export_pdf(so, out)
+            if pdf:
                 print('[pipe] PDF 预览 -> %s' % pdf)
             else:
-                print('[pipe] 注意：LibreOffice 未产出 PDF，跳过预览')
+                print('[pipe] 注意：本次 PDF 导出失败；已有 PDF 未更新')
 
     if a.math_mode == 'latex':
         print("""

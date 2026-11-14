@@ -8,6 +8,8 @@ import sys
 import tempfile
 import unittest
 import zipfile
+import importlib.util
+from unittest import mock
 from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -211,6 +213,89 @@ class ConversionTests(unittest.TestCase):
         self.assertIn('无法安全自动换行', result.stdout + result.stderr)
         self.assertEqual(out.read_bytes(), b'previous result')
 
+    def test_boxed_group_and_scripts_keep_native_structure(self):
+        tree, _, _ = self.convert('boxed_scripts', text=(
+            r'Inline $\boxed{a+b}_{i}$.' + '\n\n' + r'$$y=\boxed{x+1}^2$$'))
+        self.assertEqual(len(tree.findall('.//m:borderBox', NS)), 2)
+        self.assertEqual(''.join(tree.find('.//m:sSup/m:e/m:borderBox/m:e', NS).itertext()), 'x+1')
+        self.assertEqual(''.join(tree.find('.//m:sSub/m:e/m:borderBox/m:e', NS).itertext()), 'a+b')
+        self.assertFalse(tree.findall('.//w:pBdr', NS))
+
+    def test_unnumbered_box_preserves_tail_and_image(self):
+        for number in ('none', 'tag'):
+            with self.subTest(number=number):
+                tree, _, _ = self.convert('box_tail', number=number, text=(
+                    r'$$\boxed{x=1}$$ KEEP_THIS_TEXT 123. ' +
+                    '![](<%s>)\n' % (FIXTURES / 'assets/plot.png')))
+                self.assertIn('KEEP_THIS_TEXT 123.', ''.join(tree.itertext()))
+                self.assertEqual(len(tree.findall('.//w:drawing', NS)), 1)
+                self.assertEqual(len(tree.findall('.//m:borderBox', NS)), 1)
+
+    def test_latex_split_preserves_links_and_reference_fields(self):
+        tree, _, _ = self.convert('mixed_links', 'latex', text=(
+            '[前文](https://example.com/before) 见式（7） $$x=1 \\tag{7}$$ '
+            '[后文](https://example.com/after)\n'))
+        self.assertEqual(len(tree.findall('.//w:hyperlink', NS)), 2)
+        self.assertTrue(any(' REF eq_1 ' in f.get(W + 'instr', '')
+                            for f in tree.findall('.//w:fldSimple', NS)))
+
+    def test_failed_verification_preserves_old_output(self):
+        self.convert('atomic_output', text='Original good document.\n')
+        output = self.work / 'atomic_output-omml-all.docx'
+        previous = output.read_bytes()
+        _, _, log = self.convert('atomic_output', text=r'Unsupported $\ce{H2O}$.', success=False)
+        self.assertIn('行内公式数量不符', log)
+        self.assertEqual(output.read_bytes(), previous)
+        output.unlink()
+        src = self.work / 'atomic_output.md'
+        result = subprocess.run([sys.executable, str(self.repo / 'md2docx.py'),
+                                 str(src), '-o', str(output)], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(output.exists())
+        self.assertFalse(list(self.work.glob('.md2docx-*.docx')))
+
+    def test_tall_equations_fail_without_publishing(self):
+        expressions = [
+            'y=' + '+'.join('a_{%d}x^{%d}' % (i, i) for i in range(1, 201)),
+            r'\begin{aligned}' + r'\\'.join('x=1' for _ in range(80)) + r'\end{aligned}',
+        ]
+        for expression in expressions:
+            with self.subTest(expression=expression[:30]):
+                src, out = self.work / 'tall.md', self.work / 'tall.docx'
+                src.write_text('$$' + expression + '$$\n', encoding='utf-8')
+                out.write_bytes(b'previous result')
+                result = subprocess.run([sys.executable, str(self.repo / 'md2docx.py'),
+                                         str(src), '-o', str(out)], capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('公式高度超过', result.stdout + result.stderr)
+                self.assertEqual(out.read_bytes(), b'previous result')
+
+    def test_pdf_export_never_reuses_stale_output(self):
+        spec = importlib.util.spec_from_file_location('pdf_cli', self.repo / 'md2docx.py')
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        docx, pdf = self.work / 'preview.docx', self.work / 'preview.pdf'
+        docx.write_bytes(b'docx input')
+        pdf.write_bytes(b'old preview')
+        # 故障注入：退出失败、成功但无输出、零字节输出均不得引用旧 PDF。
+        for mode in ('failed', 'missing', 'empty', 'success'):
+            with self.subTest(mode=mode):
+                def render(command, **kwargs):
+                    folder = Path(command[command.index('--outdir') + 1])
+                    self.assertNotEqual(folder, pdf.parent)
+                    if mode in ('empty', 'success'):
+                        (folder / pdf.name).write_bytes(b'new preview' if mode == 'success' else b'')
+                    return subprocess.CompletedProcess(command, 1 if mode == 'failed' else 0)
+                with mock.patch.object(cli.subprocess, 'run', side_effect=render):
+                    result = cli.export_pdf('test-soffice', docx)
+                if mode == 'success':
+                    self.assertEqual(result, str(pdf.resolve()))
+                    self.assertEqual(pdf.read_bytes(), b'new preview')
+                else:
+                    self.assertIsNone(result)
+                    self.assertEqual(pdf.read_bytes(), b'old preview')
+                self.assertFalse(list(self.work.glob('.md2docx-pdf-*')))
+
     def test_percentage_table_uses_its_own_width(self):
         from xml.dom import minidom
         sys.path.insert(0, str(self.repo))
@@ -320,7 +405,13 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual([''.join(p.itertext()) for p in headings], ['研究背景'])
 
     def test_unsupported_inline_math_fails(self):
-        _, _, log = self.convert('unsupported_inline', success=False)
+        src = FIXTURES / 'unsupported_inline.md'
+        out = self.work / 'unsupported-inline.docx'
+        result = subprocess.run([sys.executable, str(self.repo / 'md2docx.py'),
+                                 str(src), '-o', str(out)], capture_output=True, text=True)
+        log = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, log)
+        self.assertFalse(out.exists())
         self.assertIn('行内公式数量不符', log)
         self.assertNotIn('全部检查通过', log)
         tree, _, _ = self.convert('unsupported_inline', 'latex')

@@ -4,7 +4,6 @@
 处理项：
   1. ⟦EQNO:n⟧  -> 把上一段块公式与编号合成一个段落：
                    TAB 公式 TAB (n)，制表位排版（国标公式编号写法，无表格）
-  2. ⟦BOX⟧     -> 给该公式段落加外框
   3. ⟦MISSINGIMG:名⟧ -> 醒目红色占位提示，方便回填
   4. ⟦FIGPH⟧   -> 图占位段落套 Caption 样式
   5. **图 N：xxx** / **表 N：xxx** 独立段落 -> 套 Caption 样式并居中去缩进
@@ -19,8 +18,9 @@ import re
 import sys
 import tempfile
 import zipfile
+from xml.dom import minidom
 
-from equation_layout import LayoutError, document_width, layout_equations
+from equation_layout import LayoutError, document_width, document_height, layout_equations
 
 
 def _console_safe():
@@ -33,10 +33,6 @@ def _console_safe():
             pass
 
 # ------------------------------------------------------------------ XML 片段
-
-BOXBORDER = ('<w:pBdr>' + ''.join(
-    '<w:%s w:val="single" w:sz="8" w:space="4" w:color="auto"/>' % s
-    for s in ('top', 'left', 'bottom', 'right')) + '</w:pBdr>')
 
 class BmkIds(object):
     """书签 id 必须是文档内唯一的整数，从已有最大值之上开始发号。"""
@@ -74,7 +70,7 @@ def number_xml(num, bmk, ids, seq_field):
             '<w:r><w:t>）</w:t></w:r>' % (bid, bmk, inner, bid))
 
 
-def numbered_eq_p(math_para_xml, num, bmk, ids, seq_field, boxed):
+def numbered_eq_p(math_para_xml, num, bmk, ids, seq_field):
     """把「块公式段落 + 编号」合成单个段落：公式 （n）。
 
     omml 模式：保留完整 m:oMathPara，编号 run 跟在它后面同段。
@@ -91,17 +87,17 @@ def numbered_eq_p(math_para_xml, num, bmk, ids, seq_field, boxed):
     m = OMATHPARA.search(math_para_xml)
     if m:
         # omml 模式：完整保留显示公式容器
-        return ('<w:p><w:pPr><w:pStyle w:val="EquationNumbered"/>%s</w:pPr>'
+        return ('<w:p><w:pPr><w:pStyle w:val="EquationNumbered"/></w:pPr>'
                 '%s<w:r><w:tab/></w:r>%s</w:p>'
-                % (BOXBORDER if boxed else '', m.group(0),
+                % (m.group(0),
                    number_xml(num, bmk, ids, seq_field)))
     # latex 模式：取段落内容（MathSource run）
     body = re.sub(r'^<w:p(?:\s[^>]*)?>|</w:p>$', '', math_para_xml)
     body = re.sub(r'<w:pPr>.*?</w:pPr>|<w:pPr/>', '', body, flags=re.S)
     body = re.sub(r'<w:bookmark(?:Start|End)[^>]*/>', '', body)
-    return ('<w:p><w:pPr><w:pStyle w:val="EquationNumbered"/>%s</w:pPr>'
+    return ('<w:p><w:pPr><w:pStyle w:val="EquationNumbered"/></w:pPr>'
             '%s<w:r><w:tab/></w:r>%s</w:p>'
-            % (BOXBORDER if boxed else '', body,
+            % (body,
                number_xml(num, bmk, ids, seq_field)))
 
 
@@ -236,59 +232,54 @@ RUN_RE = re.compile(r'<w:r>(?:(?!</w:r>).)*?</w:r>', re.S)
 MARK_ONLY = re.compile(r'^(?:⟦[A-Z]+(?::[^⟧]*)?⟧)+$')
 
 
-def split_inline_display(para_xml):
-    """latex 模式下拆开「正文 + 行间公式」混排的段落。
-
-    原文存在把 $$ 与正文写在同一段（中间无空行）的写法。omml 模式下 pandoc 会
-    自动把公式拆成独立段落，latex 模式下公式只是个文本 run，不拆的话这个公式
-    既不会居中也拿不到右编号。返回段落 XML 列表（不需要拆就原样返回单元素列表）。
-    """
+def split_inline_display(para_xml, namespaces):
+    """按 XML 节点拆分 LaTeX 显示公式，保留链接、域、书签和图片容器。"""
     if 'w:val="MathSource"' not in para_xml:
         return [para_xml]
-    runs = RUN_RE.findall(para_xml)
-    # 找出承载 $$ 块公式的 run
-    idx = -1
-    for k, r in enumerate(runs):
-        if 'w:val="MathSource"' in r:
-            t = re.search(r'<w:t(?:\s[^>]*)?>(.*?)</w:t>', r, re.S)
-            if t and t.group(1).startswith('$$'):
-                idx = k
-                break
-    if idx < 0:
-        return [para_xml]
+    doc = minidom.parseString('<root ' + namespaces + '>' + para_xml + '</root>')
+    para = doc.documentElement.firstChild
 
-    ppr_m = re.search(r'<w:pPr>.*?</w:pPr>|<w:pPr/>', para_xml, re.S)
-    ppr = ppr_m.group(0) if ppr_m else ''
-    # 公式后面紧跟的、只含标记的 run 要留在公式段落里（⟦EQNO⟧ / ⟦BOX⟧）
-    end = idx + 1
-    while end < len(runs):
-        t = re.search(r'<w:t(?:\s[^>]*)?>(.*?)</w:t>', runs[end], re.S)
-        if t and MARK_ONLY.match(t.group(1)):
-            end += 1
+    def partition(node):
+        if node.nodeType != node.ELEMENT_NODE:
+            return [(False, node)]
+        if node.tagName == 'w:r':
+            styles = node.getElementsByTagName('w:rStyle')
+            values = node.getElementsByTagName('w:t')
+            display = (any(n.getAttribute('w:val') == 'MathSource' for n in styles)
+                       and any(''.join(c.data for c in n.childNodes
+                                       if c.nodeType == c.TEXT_NODE).startswith('$$')
+                               for n in values))
+            return [(display, node)]
+        pieces = [piece for c in node.childNodes for piece in partition(c)]
+        if not any(display for display, _ in pieces):
+            return [(False, node)]
+        # 公式在 hyperlink 等容器内部时，分别保留前文、公式、后文的外层属性。
+        result = []
+        for display, part in pieces:
+            if not result or display or result[-1][0]:
+                result.append((display, node.cloneNode(False)))
+            result[-1][1].appendChild(part.cloneNode(True))
+        return result
+
+    ppr = [n for n in para.childNodes if n.nodeType == n.ELEMENT_NODE and n.tagName == 'w:pPr']
+    pieces = [piece for n in para.childNodes if n not in ppr for piece in partition(n)]
+    if not any(display for display, _ in pieces):
+        return [para_xml]
+    groups = []
+    for display, node in pieces:
+        marker = MARK_ONLY.fullmatch(plain(node.toxml())) is not None
+        if groups and not display and (not groups[-1][0] or marker):
+            groups[-1][1].append(node)
         else:
-            break
-
-    before, eq, after = runs[:idx], runs[idx:end], runs[end:]
-    if not before and not after:
-        return [para_xml]
-
-    def mk(rs, keep_ppr):
-        return '<w:p>%s%s</w:p>' % (keep_ppr, ''.join(rs))
-
+            groups.append((display, [node]))
     out = []
-    if before and keep_para(''.join(before)):
-        out.append(mk(before, ppr))
-    out.append(mk(eq, ppr))
-    if after:
-        # 同一段里可能还有第二个行间公式，对剩余部分递归处理
-        rest = mk(after, ppr)
-        if 'w:val="MathSource"' in rest:
-            out.extend(split_inline_display(rest))
-        elif keep_para(rest):
-            # 这里不能 strip_marks：⟦EQNO⟧ 标记通常和后续正文挤在同一个 run 里
-            # （pandoc 会把连续文本合成一个 run），提前剥掉就等于把那个公式的
-            # 编号丢了。交给主循环处理，最后统一清理残留标记。
-            out.append(rest)
+    for display, nodes in groups:
+        body = ''.join(n.toxml() for n in nodes)
+        if display or keep_para(body) or '<w:bookmark' in body:
+            p = para.cloneNode(False)
+            for node in ppr + nodes:
+                p.appendChild(node.cloneNode(True))
+            out.append(p.toxml())
     return out
 
 
@@ -415,11 +406,13 @@ def process(xml, stats, math_list=None, seq_field=True):
 
     # 切成 [段落 | 其它节点] 的有序块列表。latex 模式下顺手拆开「正文 + 行间公式」
     # 混排的段落，让它与 omml 模式（pandoc 会自动拆）表现一致。
+    root_tag = re.search(r'<(?![?!])[^>]+>', xml).group(0)
+    namespaces = ' '.join(re.findall(r'xmlns(?::[\w-]+)?="[^"]*"', root_tag))
     blocks, pos = [], 0
     for m in PARA_RE.finditer(body):
         if m.start() > pos:
             blocks.append(('raw', body[pos:m.start()]))
-        parts = split_inline_display(m.group(0))
+        parts = split_inline_display(m.group(0), namespaces)
         if len(parts) > 1:
             stats['para_split'] += 1
         for p in parts:
@@ -442,15 +435,12 @@ def process(xml, stats, math_list=None, seq_field=True):
         # --- 1/2: 编号公式 -> 制表位段落 -----------------------------
         eq = re.search(r'⟦EQNO:([^|⟧]*)\|([^|⟧]*)\|(\d+)⟧', txt)
         if eq:
-            boxed = '⟦BOX⟧' in txt
             num, bmk = eq.group(1), eq.group(2)
             # 情况 A（latex 模式）：公式与编号标记在同一段落
             if is_display_math(x):
                 out.append(numbered_eq_p(strip_marks(x), num, bmk, ids,
-                                         seq_field, boxed))
+                                         seq_field))
                 stats['eqnum'] += 1
-                if boxed:
-                    stats['boxed'] += 1
                 i += 1
                 continue
             # 情况 B（omml 模式）：公式在上一段落
@@ -458,11 +448,9 @@ def process(xml, stats, math_list=None, seq_field=True):
             while j >= 0 and not out[j].strip():
                 j -= 1
             if j >= 0 and is_display_math(out[j]):
-                out[j] = numbered_eq_p(out[j], num, bmk, ids, seq_field, boxed)
+                out[j] = numbered_eq_p(out[j], num, bmk, ids, seq_field)
                 stats['eqnum'] += 1
                 stats['eq_plain'] -= 1  # 该公式已并入编号段落，不再计入未编号
-                if boxed:
-                    stats['boxed'] += 1
                 # 编号标记所在的段落可能还带着正文：原文存在把 $$ 与正文写在同一段的
                 # 写法，pandoc 会把公式拆成独立段落，标记则落在后半段正文里。
                 # 剥掉标记后若仍有内容必须保留，否则整段正文被吞掉。
@@ -473,17 +461,6 @@ def process(xml, stats, math_list=None, seq_field=True):
                 i += 1
                 continue
             stats['eqnum_orphan'] += 1
-
-        # 孤立的 ⟦BOX⟧（无编号）
-        if '⟦BOX⟧' in txt and 'EQNO' not in txt and out:
-            j = len(out) - 1
-            while j >= 0 and '<m:oMathPara' not in out[j]:
-                j -= 1
-            if j >= 0:
-                out[j] = set_style(out[j], 'EquationPara', BOXBORDER)
-                stats['boxed'] += 1
-                i += 1
-                continue
 
         # --- 3: 缺失图片 --------------------------------------------
         mi = re.search(r'⟦MISSINGIMG:([^⟧]*)⟧', txt)
@@ -555,7 +532,7 @@ def main():
     if a.math_json and os.path.exists(a.math_json):
         math_list = json.load(open(a.math_json, encoding='utf-8'))
 
-    stats = {'eqnum': 0, 'eqnum_orphan': 0, 'boxed': 0, 'missing_img': 0,
+    stats = {'eqnum': 0, 'eqnum_orphan': 0, 'missing_img': 0,
              'figph': 0, 'caption': 0, 'eq_plain': 0, 'align_fixed': 0,
              'math_filled': 0, 'math_orphan': 0, 'ref_fields': 0, 'tail_kept': 0, 'para_split': 0,
              'leftover': []}
@@ -566,13 +543,14 @@ def main():
         changed = {}
         styles = zin.read('word/styles.xml')
         width = document_width(zin.read('word/document.xml'))
+        height = document_height(zin.read('word/document.xml'))
         try:
             for name in ('word/document.xml', 'word/footnotes.xml', 'word/endnotes.xml'):
                 if name not in zin.namelist():
                     continue
                 xml = process(zin.read(name).decode('utf-8'), stats, math_list,
                               seq_field=(a.number_style == 'plain'))
-                xml, count = layout_equations(xml, styles, width)
+                xml, count = layout_equations(xml, styles, width, height)
                 wrapped += count
                 changed[name] = xml.encode('utf-8')
         except LayoutError as error:
@@ -598,7 +576,6 @@ def main():
         print('[post] aligned 对齐符 & 修正 %d 处（改为 OMML m:aln 对齐点）' % stats['align_fixed'])
     print('[post] 公式右编号 %d 个（孤立标记 %d）' % (stats['eqnum'], stats['eqnum_orphan']))
     print('[post] 正文 REF 交叉引用域 %d 个（Word 里按 F9 联动更新）' % stats['ref_fields'])
-    print('[post] 加框公式 %d 个' % stats['boxed'])
     print('[post] 未编号块公式套样式 %d 个' % stats['eq_plain'])
     print('[post] 图表题注 %d 条' % stats['caption'])
     print('[post] 缺图占位 %d 处，图占位 %d 处' % (stats['missing_img'], stats['figph']))

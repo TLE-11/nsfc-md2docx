@@ -26,15 +26,20 @@ def run(command):
     return result
 
 
+def check_bounds(page, left=1797 / 20, right=1797 / 20, top=1440 / 20, bottom=1440 / 20):
+    assert page.chars, 'PDF 中没有文字'
+    bad = [c for c in page.chars if c['x0'] < left - 2 or c['x1'] > page.width - right + 2
+           or c['top'] < top - 2 or c['bottom'] > page.height - bottom + 2]
+    assert not bad, '文字越过版心: ' + repr([(c['text'], c['x0'], c['top'], c['bottom']) for c in bad[:5]])
+
+
 def check_page(pdf, expected_terms, left, right, numbered):
     import pdfplumber
     with pdfplumber.open(pdf) as document:
         assert len(document.pages) == 1, '意外分页'
         page = document.pages[0]
         chars = page.chars
-        assert chars, 'PDF 中没有文字'
-        bad = [c for c in chars if c['x0'] < left - 2 or c['x1'] > page.width - right + 2]
-        assert not bad, '文字越过版心: ' + repr([(c['text'], c['x0'], c['x1']) for c in bad[:5]])
+        check_bounds(page, left, right)
         terms = [c for c in chars if c['text'] == 'a']
         assert len(terms) == expected_terms, '公式项缺失或重复: %d/%d' % (len(terms), expected_terms)
         lines = sorted(set(round(c['top'] / 3) * 3 for c in terms))
@@ -90,18 +95,20 @@ def main():
             ('aligned', '# Aligned\n\n$$\\begin{aligned}' + polynomial + r'\\z&=1\end{aligned}$$' + '\n', reference, 'all', 20),
         ]
         results = {}
-        for name, content, ref, numbering, terms in cases:
+
+        def convert_render(name, content, ref=reference, numbering='all', mode='omml'):
             src, docx = out / (name + '.md'), out / (name + '.docx')
             src.write_text(content, encoding='utf-8')
-            run([sys.executable, str(repo / 'md2docx.py'), str(src), '-o', str(docx),
-                 '--reference', str(ref), '--number', numbering])
-            profile = Path(temp) / ('lo-' + name)
             pdf = out / (name + '.pdf')
             if pdf.exists():
                 pdf.unlink()
-            run([soffice, '-env:UserInstallation=' + profile.as_uri(), '--headless',
-                 '--convert-to', 'pdf', '--outdir', str(out), str(docx)])
+            run([sys.executable, str(repo / 'md2docx.py'), str(src), '-o', str(docx),
+                 '--reference', str(ref), '--number', numbering, '--math-mode', mode, '--pdf'])
             assert pdf.is_file(), 'LibreOffice 没有生成 PDF'
+            return pdf
+
+        for name, content, ref, numbering, terms in cases:
+            pdf = convert_render(name, content, ref, numbering)
             results[name] = check_page(pdf, terms, 1797 / 20, 1797 / 20, numbering == 'all')
             if name == 'table':
                 # 公式所在第二列的左边界；防止只在整页内、却越过自身单元格。
@@ -109,6 +116,46 @@ def main():
                     page = document.pages[0]
                     formula_chars = [c for c in page.chars if c['text'] == 'a']
                     assert min(c['x0'] for c in formula_chars) >= page.width / 2 - 2, '公式越过单元格左边界'
+            print('PASS', name, results[name], flush=True)
+
+        # 高但可容纳的公式，以及正文占满当前页后自动移到下一页的场景。
+        tall = 'y=' + '+'.join('a_{%d}x^{%d}' % (i, i) for i in range(1, 101))
+        pdf = convert_render('tall_supported', '$$' + tall + '$$\n')
+        results['tall_supported'] = check_page(pdf, 100, 1797 / 20, 1797 / 20, True)
+        pdf = convert_render('page_flow', 'Intro.\n\n' * 30 + '$$' + tall + '$$\n')
+        with pdfplumber.open(pdf) as document:
+            assert len(document.pages) == 2, '公式应整体移到下一页'
+            for page in document.pages:
+                check_bounds(page)
+            terms = [sum(c['text'] == 'a' for c in page.chars) for page in document.pages]
+            assert terms == [0, 100], '跨页时公式被裁切或拆散'
+            results['page_flow'] = {'pages': 2, 'terms_by_page': terms}
+
+        for mode in ('omml', 'latex'):
+            name = 'boxed_link_' + mode
+            pdf = convert_render(name, '[Source](https://example.com/source) $$y=\\boxed{x+1}^2$$ Tail 123.\n', mode=mode)
+            with pdfplumber.open(pdf) as document:
+                assert len(document.pages) == 1
+                page = document.pages[0]
+                check_bounds(page)
+                assert 'Tail 123.' in page.extract_text(), '公式后的尾文丢失'
+                assert any(link.get('uri') == 'https://example.com/source' for link in page.hyperlinks), '链接丢失'
+                results[name] = {'pages': 1, 'tail_and_link': 'preserved'}
+
+        # 200 项已在旧版实测裁切；新版本必须拒绝，且不能发布新的 DOCX/PDF。
+        src, docx, pdf = (out / ('too_tall.' + suffix) for suffix in ('md', 'docx', 'pdf'))
+        src.write_text('$$y=' + '+'.join('a_{%d}x^{%d}' % (i, i) for i in range(1, 201)) + '$$\n')
+        docx.write_bytes(b'previous DOCX')
+        pdf.write_bytes(b'previous PDF')
+        result = subprocess.run([sys.executable, str(repo / 'md2docx.py'), str(src), '-o', str(docx), '--pdf'],
+                                capture_output=True, encoding='utf-8')
+        assert result.returncode != 0 and '公式高度超过' in result.stdout + result.stderr
+        assert docx.read_bytes() == b'previous DOCX' and pdf.read_bytes() == b'previous PDF'
+        # 哨兵用于失败原子性断言，不作为可打开的文档交付。
+        docx.unlink()
+        pdf.unlink()
+        results['too_tall'] = {'rejected': True, 'previous_outputs_preserved': True}
+        for name in ('tall_supported', 'page_flow', 'boxed_link_omml', 'boxed_link_latex', 'too_tall'):
             print('PASS', name, results[name], flush=True)
         (out / 'results.json').write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding='utf-8')
     return 0

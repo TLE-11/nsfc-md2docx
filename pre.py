@@ -5,7 +5,7 @@
   1. \rm / \bf / \it / \sf / \tt  ->  \mathrm / \mathbf / ...   (texmath 不支持老式字体命令，
      遇到就整块公式退化成 LaTeX 原文，这是"公式变成代码"的首要原因)
   2. \tag{n}  ->  从公式里摘掉，改成段落末尾的 ⟦EQNO:n⟧ 标记，交给 post.py 做右对齐编号
-  3. \boxed{...} -> 摘掉方框，记录为需要加边框的公式
+  3. \boxed{...} 保留原生数学分组，由 pandoc 输出 OMML 方框
   4. Obsidian ![[图片]] -> 标准 ![](真实路径)，并在附件目录里搜索文件
   5. 标题层级归一化：修正 ### 下面挂 ## 这类倒挂
   6. 【图占位N：说明】 -> 独立段落 + 图题占位
@@ -232,25 +232,6 @@ def fix_font_cmds(m, stats):
 # --------------------------------------------------------------- 2. \tag 提取
 
 TAG_RE = re.compile(r'\\tag\{([^}]*)\}')
-BOXED_RE = re.compile(r'\\boxed\s*\{')
-
-
-def strip_boxed(m, stats):
-    """\boxed{X} -> X，并记账（OMML 无对应结构，改由 post.py 给段落加边框）。"""
-    boxed = False
-    while True:
-        hit = BOXED_RE.search(m)
-        if not hit:
-            return m, boxed
-        open_brace = hit.end() - 1
-        close = _match_brace(m, open_brace)
-        if close == -1:
-            return m, boxed
-        m = m[:hit.start()] + m[open_brace + 1:close] + m[close + 1:]
-        boxed = True
-        stats['boxed'] += 1
-
-
 # ------------------------------------------------------------------ 主处理流程
 
 def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
@@ -259,12 +240,12 @@ def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
          omml  —— 公式交给 pandoc 编译成 Word 原生公式对象（默认）
          latex —— 公式保留 LaTeX 源码，作为带样式的文本落到 docx 里，
                   再由 MathType / AxMath 的批量转换功能就地转成它们自己的公式对象。
-                  好处是绕开 texmath 的短板（\boxed、复杂 aligned 等），
+                  好处是绕开 texmath 不支持的命令，
                   由更强的解析器处理；代价是必须装对应软件才能变成公式。
     """
     latex_mode = (math_mode == 'latex')
 
-    # --- 2/3: 块公式里摘 \tag 与 \boxed ---------------------------------
+    # --- 2: 块公式里摘 \tag ---------------------------------
     def on_block(body):
         body = strip_math_comments(body)
         tags = TAG_RE.findall(body)
@@ -276,17 +257,10 @@ def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
         body, n = re.subn(r'\n[ \t]*\n+', '\n', body)
         if n:
             stats['blank_in_math'] += n
-        # \boxed 在 latex 模式下原样保留，MathType/AxMath 认得
-        if latex_mode:
-            boxed = False
-        else:
-            body, boxed = strip_boxed(body, stats)
         body = fix_font_cmds(body, stats)
         body = body.strip()
 
         marks = ''
-        if boxed:
-            marks += '⟦BOX⟧'
         # 每个块公式都打一个占位标记，原有 \tag 号记在里面（没有就留空）。
         # 最终编号在后面的编号扫描里统一分配，这样才能给所有行间公式编号，
         # 同时保留 旧tag号 -> 新编号 的映射用于回改正文里的"式（n）"。
@@ -305,8 +279,6 @@ def process(text, assets_dirs, stats, math_mode='omml', math_sink=None,
         return '$$' + compact_math(body) + '$$' + marks
 
     def on_inline(body):
-        if not latex_mode:
-            body, _ = strip_boxed(body, stats)
         body = fix_font_cmds(body, stats)
         stats['math_inline'] += 1
         if latex_mode:
@@ -484,7 +456,7 @@ def main():
     a = ap.parse_args()
     _console_safe()
 
-    stats = {'font_fixed': 0, 'font_unbalanced': 0, 'tags': 0, 'boxed': 0,
+    stats = {'font_fixed': 0, 'font_unbalanced': 0, 'tags': 0,
              'img_found': 0, 'img_missing': [], 'placeholders': 0,
              'heading_fixed': [], 'hr_normalized': 0, 'math_latex': 0,
              'blank_in_math': 0, 'math_blocks': 0, 'math_inline': 0,
@@ -513,7 +485,6 @@ def main():
               % (len(stats['ref_unresolved']), '、'.join(stats['ref_unresolved'])))
     if stats['dup_tags']:
         print('[pre] 注意：源文件里重复的 \\tag 号 %s' % '、'.join(stats['dup_tags']))
-    print('[pre] \\boxed 摘除 %d 处' % stats['boxed'])
     print('[pre] 图片解析成功 %d 张，缺失 %d 张 %s'
           % (stats['img_found'], len(stats['img_missing']), stats['img_missing'] or ''))
     if stats['assets_bad']:

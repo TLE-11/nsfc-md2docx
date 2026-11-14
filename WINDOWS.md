@@ -66,44 +66,38 @@ md2docx.bat 本子.md -o 待转换.docx --math-mode latex
 
 1. 按 `Alt+F11` 打开 VBA 编辑器
 2. 文件 → 导入文件 → 选仓库根目录下的 `mathtype_axmath.bas`
-3. 回到 Word 按 `Alt+F8`，先运行 **`ProbeEquationMacros`**
+3. 回到 Word 按 `Alt+F8`，可先运行 **`ProbeEquationMacros`** 查看加载项和宏名配置
 
-`ProbeEquationMacros` 会列出本机装了哪些 Word 加载项，以及 MathType / AxMath
-到底暴露了哪些能从 VBA 调用的宏。**必须先跑这个**，原因见下面「为什么要探测」。
+此报告不会执行任何插件宏，也不验证配置名称是否可用。
 
-- 探测**到**可用宏 → 直接运行 `ConvertLatexToMathType` 或 `ConvertLatexToAxMath`，
-  它会倒序逐个转换并报告成功/失败数
-- 探测**不到** → 运行 `SelectLatexEquations` 把待转换内容标成黄色高亮，
-  然后用插件自己的 GUI 批量功能：
-  - MathType：Convert Equations → 输入勾 `Text using a translator` → 选 TeX 翻译器 → 范围 Whole document
-  - AxMath：插件菜单的批量处理功能
+- 没有本机已确认的宏名：运行 `SelectLatexEquations` 标记源码，使用插件 GUI 批量转换。
+  MathType 可使用 Convert Equations 的 TeX 输入；AxMath 使用插件菜单的批量处理功能。
+- 已从插件文档或受控试运行确认宏名：填入模块顶部的
+  `MATHTYPE_MACRO_OVERRIDE` / `AXMATH_MACRO_OVERRIDE`，再运行对应转换宏。
+  转换宏会在执行前提示备份并请求确认。
 
-转完运行 `CleanupAfterConvert` 去高亮、清残留样式和 `$` 定界符，
-再运行 `UpdateAllFields` 刷新公式编号与交叉引用。
+计数、高亮和转换均覆盖正文、脚注、尾注及其他 story。每处源码只尝试一次；
+插件报错或未消耗源码时记为失败，保留源码、样式和定界符供重试。
+`CleanupAfterConvert` 只清理已转换内容的残留样式，不删除待转换源码的 `$`。
+最后运行 `UpdateAllFields` 刷新公式编号与引用。
 
-### 为什么要探测，而不是直接给你一条命令
+### 为什么不自动试执行宏
 
-MathType 和 AxMath **都没有公开、稳定的 VBA 接口文档**。能查到的唯一线索是一条
-2009 年的资料提到 MathType 6.5 的 `MTCommand_TeXToggle`，而现在是 MathType 7，
-这个名字还在不在没法确认；AxMath 官方文档只写了插件按钮，没写 VBA 接口。
-
-我不在这台 macOS 上验证不了的东西上硬编码猜测值，所以做成探测 + 报告 + 优雅降级：
-探测得到就自动用，探测不到就明确告诉你走 GUI（那条路是官方文档写明的、可靠的）。
-
-跑完 `ProbeEquationMacros` 如果发现了可用的宏名，填到 `mathtype_axmath.bas` 顶部的
-`MATHTYPE_MACRO_OVERRIDE` / `AXMATH_MACRO_OVERRIDE` 常量里，以后就不用再探测了。
+`Application.Run` 会实际运行宏，不能作为只读的“接口探测”。候选宏可能修改当前选区、
+打开对话框或启动批量转换，因此工具不再通过试执行猜测插件接口。
+未配置已确认宏名时，转换宏会明确提示改用 GUI。
 
 ## 宏清单
 
 | 宏 | 作用 | 是否依赖插件 |
 |---|---|---|
-| `UpdateAllFields` | 更新全文域：公式 SEQ 编号 + 正文 REF 引用。会跑两遍（两者互相依赖） | 不依赖，永远可用 |
+| `UpdateAllFields` | 更新全文域：公式 SEQ 编号 + 正文 REF 引用。会跑两遍（两者互相依赖） | 不依赖插件 |
 | `CountLatexEquations` | 数还剩多少处未转换的 LaTeX 源码 | 不依赖 |
 | `SelectLatexEquations` | 把全部 LaTeX 源码标黄，便于确认范围 / GUI 批量转换 | 不依赖 |
-| `ProbeEquationMacros` | 探测本机可调用的插件宏，只报告不改文档 | — |
-| `ConvertLatexToMathType` | 逐个转成 MathType 公式 | 依赖 MathType 且探测到接口 |
-| `ConvertLatexToAxMath` | 逐个转成 AxMath 公式 | 依赖 AxMath 且探测到接口 |
-| `CleanupAfterConvert` | 去高亮、清残留 `MathSource` 样式与 `$` 定界符 | 不依赖 |
+| `ProbeEquationMacros` | 报告加载项和已配置宏名，不执行宏 | — |
+| `ConvertLatexToMathType` | 逐个转成 MathType 公式 | 依赖 MathType 且配置已确认宏名 |
+| `ConvertLatexToAxMath` | 逐个转成 AxMath 公式 | 依赖 AxMath 且配置已确认宏名 |
+| `CleanupAfterConvert` | 清理已转换内容的样式；保留待转换源码 | 不依赖 |
 
 转换宏会先弹确认框并提醒备份。**动手前请另存一份。**
 
@@ -117,3 +111,16 @@ macOS 上装不了，那边只能用默认的 OMML 模式。
 - 编号用 `SEQ` 域，在 Word 里增删公式后按 `Ctrl+A` 再 `F9` 可整篇重编号
 - 正文引用用 `REF` 域指向编号书签，跟着编号一起变
 - 直接用宏 `UpdateAllFields` 更省事，它会正确地跑两遍
+
+## VBA 回归验证
+
+普通 `example/run_tests.sh` 包含静态契约检查，不会启动 Word。
+Windows + Word 下还可运行：
+
+```powershell
+powershell -File example/test_word_macros.ps1
+```
+
+前提是用户已允许访问 VBA 工程对象模型；脚本不修改该设置。它新建临时文档，
+使用受控宏替身验证确认取消、正文/脚注/尾注转换、失败重试和清理，完成后关闭临时文档。
+该测试不验证真实 MathType/AxMath 插件的接口与符号保真度；转换后仍需抽查。
